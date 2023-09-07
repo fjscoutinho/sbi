@@ -95,10 +95,12 @@ def likelihood_nn(
     z_score_theta: Optional[str] = "independent",
     z_score_x: Optional[str] = "independent",
     hidden_features: int = 50,
+    hidden_layers: int = 2,
     num_transforms: int = 5,
     num_bins: int = 10,
     embedding_net: nn.Module = nn.Identity(),
     num_components: int = 10,
+    activation_fun_cnet: nn.Module = nn.Sigmoid(),
     **kwargs,
 ) -> Callable:
     r"""
@@ -120,6 +122,7 @@ def likelihood_nn(
         z_score_x: Whether to z-score simulation outputs $x$ before passing them into
             the network, same options as z_score_theta.
         hidden_features: Number of hidden features.
+        hidden_layers: Number of hidden layers for both nets.
         num_transforms: Number of transforms when a flow is used. Only relevant if
             density estimator is a normalizing flow (i.e. currently either a `maf` or a
             `nsf`). Ignored if density estimator is a `mdn` or `made`.
@@ -128,6 +131,7 @@ def likelihood_nn(
         embedding_net: Optional embedding network for parameters $\theta$.
         num_components: Number of mixture components for a mixture of Gaussians.
             Ignored if density estimator is not an mdn.
+        activation_fun_cnet: Activation function in categorical net.
         kwargs: additional custom arguments passed to downstream build functions.
     """
 
@@ -137,19 +141,23 @@ def likelihood_nn(
                 "z_score_x",
                 "z_score_y",
                 "hidden_features",
+                "hidden_layers",
                 "num_transforms",
                 "num_bins",
                 "embedding_net",
                 "num_components",
+                "activation_fun_cnet"
             ),
             (
                 z_score_x,
                 z_score_theta,
                 hidden_features,
+                hidden_layers,
                 num_transforms,
                 num_bins,
                 embedding_net,
                 num_components,
+                activation_fun_cnet,
             ),
         ),
         **kwargs,

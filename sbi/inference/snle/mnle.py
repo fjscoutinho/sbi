@@ -6,6 +6,7 @@ from copy import deepcopy
 from typing import Any, Callable, Dict, Optional, Union
 
 from torch.distributions import Distribution
+from torch import nn
 
 from sbi.inference.posteriors import MCMCPosterior, RejectionPosterior, VIPosterior
 from sbi.inference.potentials import mixed_likelihood_estimator_based_potential
@@ -24,6 +25,13 @@ class MNLE(LikelihoodEstimator):
         logging_level: Union[int, str] = "WARNING",
         summary_writer: Optional[TensorboardSummaryWriter] = None,
         show_progress_bars: bool = True,
+        hidden_features: int = 50,
+        hidden_layers: int = 2,
+        num_transforms: int = 5,
+        num_bins: int = 10,
+        activation_fun_cnet: nn = nn.Sigmoid(),
+        simulator: Optional[Callable] = None,
+        likelihood: Optional[Callable] = None,
     ):
         r"""Mixed Neural Likelihood Estimation (MNLE) [1].
 
@@ -63,29 +71,6 @@ class MNLE(LikelihoodEstimator):
                 not with {density_estimator}."""
         kwargs = del_entries(locals(), entries=("self", "__class__"))
         super().__init__(**kwargs)
-
-    def train(
-        self,
-        training_batch_size: int = 50,
-        learning_rate: float = 5e-4,
-        validation_fraction: float = 0.1,
-        stop_after_epochs: int = 20,
-        max_num_epochs: int = 2**31 - 1,
-        clip_max_norm: Optional[float] = 5.0,
-        resume_training: bool = False,
-        discard_prior_samples: bool = False,
-        retrain_from_scratch: bool = False,
-        show_train_summary: bool = False,
-        dataloader_kwargs: Optional[Dict] = None,
-    ) -> MixedDensityEstimator:
-        density_estimator = super().train(
-            **del_entries(locals(), entries=("self", "__class__"))
-        )
-        assert isinstance(
-            density_estimator, MixedDensityEstimator
-        ), f"""Internal net must be of type
-            MixedDensityEstimator but is {type(density_estimator)}."""
-        return density_estimator
 
     def build_posterior(
         self,
@@ -151,10 +136,7 @@ class MNLE(LikelihoodEstimator):
         ), f"""net must be of type MixedDensityEstimator but is {type
             (likelihood_estimator)}."""
 
-        (
-            potential_fn,
-            theta_transform,
-        ) = mixed_likelihood_estimator_based_potential(
+        potential_fn, theta_transform = mixed_likelihood_estimator_based_potential(
             likelihood_estimator=likelihood_estimator, prior=prior, x_o=None
         )
 

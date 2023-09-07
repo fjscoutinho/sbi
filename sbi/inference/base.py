@@ -2,7 +2,7 @@
 # under the Affero General Public License v3, see <https://www.gnu.org/licenses/>.
 
 from abc import ABC, abstractmethod
-from copy import deepcopy
+from copy import deepcopy, copy
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple, Union
@@ -22,6 +22,10 @@ from sbi.utils import check_prior, get_log_root
 from sbi.utils.sbiutils import get_simulations_since_round
 from sbi.utils.torchutils import check_if_prior_on_device, process_device
 from sbi.utils.user_input_checks import prepare_for_sbi
+
+import numpy as np
+import matplotlib.pyplot as plt
+from IPython.display import clear_output
 
 
 def infer(
@@ -91,6 +95,8 @@ class NeuralInference(ABC):
         logging_level: Union[int, str] = "WARNING",
         summary_writer: Optional[SummaryWriter] = None,
         show_progress_bars: bool = True,
+        simulator: Optional[Callable] = None,
+        likelihood: Optional[Callable] = None,
     ):
         r"""Base class for inference methods.
 
@@ -112,6 +118,8 @@ class NeuralInference(ABC):
         check_prior(prior)
         check_if_prior_on_device(self._device, prior)
         self._prior = prior
+        self._simulator = simulator
+        self._likelihood = likelihood
 
         self._posterior = None
         self._neural_net = None
@@ -131,6 +139,7 @@ class NeuralInference(ABC):
 
         self._round = 0
         self._val_log_prob = float("-Inf")
+        self._train_log_prob = float("-Inf")
 
         # XXX We could instantiate here the Posterior for all children. Two problems:
         #     1. We must dispatch to right PotentialProvider for mcmc based on name
@@ -143,11 +152,28 @@ class NeuralInference(ABC):
 
         # Logging during training (by SummaryWriter).
         self._summary = dict(
+            epochs=[],
             epochs_trained=[],
-            best_validation_log_prob=[],
-            validation_log_probs=[],
-            training_log_probs=[],
             epoch_durations_sec=[],
+            all_training_log_probs=[],
+            training_log_probs=[],
+            best_training_log_prob=[],
+            validation_huber_probs=[],
+            all_validation_log_probs=[],
+            validation_log_probs=[],
+            best_validation_log_prob=[],
+            theo_log_probs=[],
+            theo_c_log_probs=[],
+            running_num_simulations=[],
+            running_num_effective_simulations=[],
+            total_num_simulations=[],
+            total_num_effective_simulations=[],
+            minibatch_sizes=[],
+            batch_sizes=[],
+            running_minibatch_sizes=[],
+            running_batch_sizes=[],
+            neural_nets=[],
+            best_neural_nets=[],
         )
 
     def get_simulations(
@@ -261,6 +287,100 @@ class NeuralInference(ABC):
         val_loader = data.DataLoader(dataset, **val_loader_kwargs)
 
         return train_loader, val_loader
+    
+    def get_dataloaders_online(
+        self,
+        starting_round: int = 0,
+        training_batch_size: int = 50,
+        dataloader_kwargs: Optional[dict] = None,
+    ) -> Tuple[data.DataLoader, data.DataLoader]:
+        """Return dataloaders for training and validation.
+
+        Args:
+            dataset: holding all theta and x, optionally masks.
+            training_batch_size: training arg of inference methods.
+            dataloader_kwargs: Additional or updated kwargs to be passed to the training
+                and validation dataloaders (like, e.g., a collate_fn).
+
+        Returns:
+            Tuple of dataloaders for training and validation.
+
+        """
+
+        #
+        theta, x, prior_masks = self.get_simulations(starting_round)
+
+        dataset = data.TensorDataset(theta, x, prior_masks)
+
+        # Get total number of training examples.
+        num_training_examples = theta.size(0)
+
+        # Define training indices as natural order data is simulated in.
+        self.train_indices = torch.arange(x.shape[0])
+
+        # Create training and validation loaders using a subset sampler.
+        # Intentionally use dicts to define the default dataloader args
+        # Then, use dataloader_kwargs to override (or add to) any of these defaults
+        # https://stackoverflow.com/questions/44784577/in-method-call-args-how-to-override-keyword-argument-of-unpacked-dict
+        train_loader_kwargs = {
+            "batch_size": min(training_batch_size, num_training_examples),
+            "drop_last": True,
+            "sampler": SubsetRandomSampler(self.train_indices.tolist()),
+        }
+
+        if dataloader_kwargs is not None:
+            train_loader_kwargs = dict(train_loader_kwargs, **dataloader_kwargs)
+
+        train_loader = data.DataLoader(dataset, **train_loader_kwargs)
+
+        return train_loader
+
+    def get_dataloaders_dynamically(
+        self,
+        starting_round: int = 0,
+        training_batch_size: int = 50,
+        dataloader_kwargs: Optional[dict] = None,
+    ) -> Tuple[data.DataLoader, data.DataLoader]:
+        """Return dataloaders for training and validation.
+
+        Args:
+            dataset: holding all theta and x, optionally masks.
+            training_batch_size: training arg of inference methods.
+            dataloader_kwargs: Additional or updated kwargs to be passed to the training
+                and validation dataloaders (like, e.g., a collate_fn).
+
+        Returns:
+            Tuple of dataloaders for training and validation.
+
+        """
+
+        #
+        theta, x, prior_masks = self.get_simulations(starting_round)
+
+        dataset = data.TensorDataset(theta, x, prior_masks)
+
+        # Get total number of training examples.
+        num_training_examples = theta.size(0)
+
+        # Define training indices as natural order data is simulated in.
+        self.train_indices = torch.arange(x.shape[0])
+
+        # Create training and validation loaders using a subset sampler.
+        # Intentionally use dicts to define the default dataloader args
+        # Then, use dataloader_kwargs to override (or add to) any of these defaults
+        # https://stackoverflow.com/questions/44784577/in-method-call-args-how-to-override-keyword-argument-of-unpacked-dict
+        train_loader_kwargs = {
+            "batch_size": min(training_batch_size, num_training_examples),
+            "drop_last": True,
+            "sampler": SubsetRandomSampler(self.train_indices.tolist()),
+        }
+
+        if dataloader_kwargs is not None:
+            train_loader_kwargs = dict(train_loader_kwargs, **dataloader_kwargs)
+
+        train_loader = data.DataLoader(dataset, **train_loader_kwargs)
+
+        return train_loader
 
     def _converged(self, epoch: int, stop_after_epochs: int) -> bool:
         """Return whether the training converged yet and save best model state so far.
@@ -294,6 +414,237 @@ class NeuralInference(ABC):
 
         return converged
 
+    def _converged_flipping(self, epoch: int, stop_after_epochs: int) -> bool:
+        """Return whether the training converged yet and save best model state so far.
+
+        Checks for improvement in validation performance over previous epochs.
+
+        Args:
+            epoch: Current epoch in training.
+            stop_after_epochs: How many fruitless epochs to let pass before stopping.
+
+        Returns:
+            Whether the training has stopped improving, i.e. has converged.
+        """
+        converged = False
+
+        assert self._neural_net is not None
+        neural_net = self._neural_net
+
+        # (Re)-start the epoch count with the first epoch or any improvement.
+        if epoch == 0 or self._val_log_prob > self._best_val_log_prob:
+            self._best_val_log_prob = self._val_log_prob
+            self._epochs_since_last_improvement = 0
+            self._best_model_state_dict = deepcopy(neural_net.state_dict())
+        else:
+            self._epochs_since_last_improvement += 1
+
+        # If no validation improvement over many epochs, stop training.
+        if self._double_down_counter > stop_after_epochs - 1:
+            neural_net.load_state_dict(self._best_model_state_dict)
+            converged = True
+
+        return converged
+
+    def _converged_adaptive(self, epoch: int, stop_after_epochs: int) -> bool:
+        """Return whether the training converged yet and save best model state so far.
+
+        Checks for improvement in validation performance over previous epochs.
+
+        Args:
+            epoch: Current epoch in training.
+            stop_after_epochs: How many fruitless epochs to let pass before stopping.
+
+        Returns:
+            Whether the training has stopped improving, i.e. has converged.
+        """
+        converged = False
+
+        assert self._neural_net is not None
+        neural_net = self._neural_net
+
+        # (Re)-start the epoch count with the first epoch or any improvement.
+        if self._val_log_prob > self._best_val_log_prob:
+            self._best_val_log_prob = self._val_log_prob
+            self._epochs_since_last_improvement = 0
+            self._epochs_of_consecutive_improvement += 1
+            self._best_model_state_dict = deepcopy(neural_net.state_dict())
+        else:
+            self._epochs_since_last_improvement += 1
+            self._epochs_of_consecutive_improvement = 0
+
+        # If no validation improvement over many epochs, stop training.
+        if self._epochs_since_last_improvement > stop_after_epochs - 1:
+            neural_net.load_state_dict(self._best_model_state_dict)
+            converged = True
+
+        return converged
+
+    def _converged_rejection(self, epoch: int, stop_after_epochs: int) -> bool:
+        """Return whether the training converged yet and save best model state so far.
+
+        Checks for improvement in validation performance over previous epochs.
+
+        Args:
+            epoch: Current epoch in training.
+            stop_after_epochs: How many fruitless epochs to let pass before stopping.
+
+        Returns:
+            Whether the training has stopped improving, i.e. has converged.
+        """
+        converged = False
+
+        assert self._neural_net is not None
+        neural_net = self._neural_net
+
+        if epoch == 0:
+            self._best_val_log_prob = self._val_log_prob
+            self._epochs_since_last_improvement = 0
+            self._epochs_of_consecutive_improvement = 0
+            self._best_model_state_dict = deepcopy(neural_net.state_dict())
+            self._best_model_epoch = epoch
+
+        # (Re)-start the epoch count with the first epoch or any improvement.
+        if self._val_log_prob > self._best_val_log_prob:
+            self._best_val_log_prob = self._val_log_prob
+            self._epochs_since_last_improvement = 0
+            self._epochs_of_consecutive_improvement += 1
+            self._best_model_state_dict = deepcopy(neural_net.state_dict())
+            self._best_model_epoch = epoch
+        else:
+            self._epochs_since_last_improvement += 1
+            self._epochs_of_consecutive_improvement = 0
+
+        # If no validation improvement over many epochs, stop training.
+        if self._epochs_since_last_improvement > stop_after_epochs - 1:
+            neural_net.load_state_dict(self._best_model_state_dict)
+            converged = True
+
+        return converged
+
+    def _converged_annealing(self, epoch: int, stop_after_epochs: int) -> bool:
+        """Return whether the training converged yet and save best model state so far.
+
+        Checks for improvement in validation performance over previous epochs.
+
+        Args:
+            epoch: Current epoch in training.
+            stop_after_epochs: How many fruitless epochs to let pass before stopping.
+
+        Returns:
+            Whether the training has stopped improving, i.e. has converged.
+        """
+        converged = False
+
+        assert self._neural_net is not None
+        neural_net = self._neural_net
+
+        if epoch == 0:
+            self._best_val_log_prob = self._val_log_prob
+            self._epochs_since_last_improvement = 0
+            self._epochs_of_consecutive_improvement = 0
+            self._best_model_state_dict = deepcopy(neural_net.state_dict())
+            self._best_model_epoch = epoch
+            self._increase_batch_size = False
+
+        # (Re)-start the epoch count with the first epoch or any improvement.
+        if self._val_log_prob > self._best_val_log_prob:
+            self._best_val_log_prob = self._val_log_prob
+            self._epochs_since_last_improvement = 0
+            self._best_model_state_dict = deepcopy(neural_net.state_dict())
+            self._best_model_epoch = epoch
+            if self._increase_batch_size:
+                self._epochs_of_consecutive_improvement += 1
+        else:
+            self._epochs_since_last_improvement += 1
+            self._epochs_of_consecutive_improvement = 0
+            self._increase_batch_size = True
+
+        # If no validation improvement over many epochs, stop training.
+        if self._epochs_since_last_improvement > stop_after_epochs - 1:
+            neural_net.load_state_dict(self._best_model_state_dict)
+            converged = True
+
+        return converged
+
+    def _converged_online(
+            self,
+            epoch: int,
+            min_training_std: float,
+            min_training_ma_std: float) -> bool:
+        """Return whether the training converged yet and save best model state so far.
+
+        Checks for improvement in validation performance over previous epochs.
+
+        Args:
+            epoch: Current epoch in training.
+            stop_after_epochs: How many fruitless epochs to let pass before stopping.
+
+        Returns:
+            Whether the training has stopped improving, i.e. has converged.
+        """
+        converged = False
+
+        assert self._neural_net is not None
+        neural_net = self._neural_net
+
+        # (Re)-start the epoch count with the first epoch or any improvement.
+        if epoch == 0 or self._train_log_prob > self._best_training_log_prob:
+            self._best_training_log_prob = self._train_log_prob
+            self._epochs_since_last_improvement = 0
+            self._best_model_state_dict = deepcopy(neural_net.state_dict())
+        else:
+            self._epochs_since_last_improvement += 1
+
+        # If no training improvement over many epochs, stop training.
+        if epoch > 20:
+            _train_log_prob_ma_std = np.std([np.mean(self._summary["training_log_probs"][-20::]), np.mean(self._summary["training_log_probs"][-10::])])
+            _train_log_prob_std = np.std(self._summary["training_log_probs"][-20::])
+            if _train_log_prob_ma_std < min_training_ma_std and _train_log_prob_std < min_training_std:
+                neural_net.load_state_dict(self._best_model_state_dict)
+                converged = True
+
+        return converged
+
+    def _converged_dynamically(
+            self,
+            epoch: int,
+            min_training_std: float,
+            min_training_ma_std: float) -> bool:
+        """Return whether the training converged yet and save best model state so far.
+
+        Checks for improvement in validation performance over previous epochs.
+
+        Args:
+            epoch: Current epoch in training.
+            stop_after_epochs: How many fruitless epochs to let pass before stopping.
+
+        Returns:
+            Whether the training has stopped improving, i.e. has converged.
+        """
+        converged = False
+
+        assert self._neural_net is not None
+        neural_net = self._neural_net
+
+        # (Re)-start the epoch count with the first epoch or any improvement.
+        if epoch == 0 or self._train_log_prob > self._best_training_log_prob:
+            self._best_training_log_prob = self._train_log_prob
+            self._epochs_since_last_improvement = 0
+            self._best_model_state_dict = deepcopy(neural_net.state_dict())
+        else:
+            self._epochs_since_last_improvement += 1
+
+        # If no training improvement over many epochs, stop training.
+        if epoch > 20:
+            _train_log_prob_ma_std = np.std([np.mean(self._summary["training_log_probs"][-20::]), np.mean(self._summary["training_log_probs"][-10::])])
+            _train_log_prob_std = np.std(self._summary["training_log_probs"][-20::])
+            if _train_log_prob_ma_std < min_training_ma_std and _train_log_prob_std < min_training_std:
+                neural_net.load_state_dict(self._best_model_state_dict)
+                converged = True
+
+        return converged
+
     def _default_summary_writer(self) -> SummaryWriter:
         """Return summary writer logging to method- and simulator-specific directory."""
 
@@ -320,6 +671,38 @@ class NeuralInference(ABC):
         return description
 
     @staticmethod
+    def _describe_online_round(round_: int, summary: Dict[str, list]) -> str:
+        epochs = summary["epochs_trained"][-1]
+        best_training_log_prob = summary["best_training_log_prob"][-1]
+
+        description = f"""
+        -------------------------
+        ||||| ROUND {round_ + 1} STATS |||||:
+        -------------------------
+        Epochs trained: {epochs}
+        Best training performance: {best_training_log_prob:.4f}
+        -------------------------
+        """
+
+        return description
+
+    @staticmethod
+    def _describe_dynamic_round(round_: int, summary: Dict[str, list]) -> str:
+        epochs = summary["epochs_trained"][-1]
+        best_training_log_prob = summary["best_training_log_prob"][-1]
+
+        description = f"""
+        -------------------------
+        ||||| ROUND {round_ + 1} STATS |||||:
+        -------------------------
+        Epochs trained: {epochs}
+        Best training performance: {best_training_log_prob:.4f}
+        -------------------------
+        """
+
+        return description
+
+    @staticmethod
     def _maybe_show_progress(show: bool, epoch: int) -> None:
         if show:
             # end="\r" deletes the print statement when a new one appears.
@@ -327,10 +710,190 @@ class NeuralInference(ABC):
             # to #330.
             print("\r", f"Training neural network. Epochs trained: {epoch}", end="")
 
+    @staticmethod
+    def _maybe_save_metrics(score_mnle, neural_net, summary: Dict, metrics_dictionary:  Dict) -> None:
+        if metrics_dictionary is not None and metrics_dictionary["save_metrics"] == True:
+            # Calculate Huber validation performance with independently drawn parameters and data.
+            _val_errors, _ = score_mnle(neural_net, metrics_dictionary)
+            _val_huber_probs = _val_errors[:,1]
+
+            # Log Huber validation prob for every epoch.
+            summary["validation_huber_probs"].append(_val_huber_probs)
+
+    @staticmethod
+    def _maybe_compute_example_RTs(visualise_mnle, neural_net, summary: Dict, metrics_dictionary:  Dict) -> None:
+        if metrics_dictionary is not None:
+            # Calculate Huber validation performance with independently drawn parameters
+            # and data.
+            rt_dict = visualise_mnle(neural_net, metrics_dictionary)
+
+            # Log Huber validation prob for every epoch.
+            summary["rt_dict"] = rt_dict
+
+    @staticmethod
+    def _maybe_plot_training(show_plot: bool, summary: Dict) -> None:
+        if show_plot:
+            fig, axes = plt.subplots(1, 3)
+
+            clear_output(wait=True)
+
+            col1 = 1
+            col2 = 2
+            col3 = 0
+
+            # Plot training and validation losses
+            x = np.arange(1, len(np.array(summary["training_log_probs"]))+1)
+            x2 = np.array(summary["running_num_simulations"])
+            y = np.array(summary["training_log_probs"])
+            axes[col1].plot(x, y, c='tab:blue', label="training loss")
+            if len(summary["validation_log_probs"]) > 0:
+                y = np.array(summary["validation_log_probs"])
+                axes[col1].plot(x, y, c='tab:orange', label="validation loss")
+            if len(summary["theo_log_probs"]) > 0:
+                y = np.array(summary["theo_log_probs"])
+                axes[col1].scatter(x, y, c='k', s=5, label="analytical log-likelihood")
+            try:
+                ax2 = axes[col1].twiny()
+                ax2.set_xlabel("number of simulations")
+                ticklabels = x2[0], x2[int(len(x2)*0.5)], x2[-1]
+                ax2.set_xticks(np.linspace(0, len(x2), num=3))
+                ax2.set_xticklabels(ticklabels)
+            except:
+                pass
+            axes[col1].set_xlabel("epoch")
+            axes[col1].set_ylabel("probability")
+            axes[col1].legend()
+
+            # Plot Huber loss
+            axes[col2].set_ylim(bottom=0, top=0.04)
+            if len(summary["validation_huber_probs"]) > 0:
+                y = np.mean(np.array(summary["validation_huber_probs"]), axis=1)
+                axes[col2].plot(x, y, c='tab:red', label="huber loss")
+                axes[col2].set_xlabel("epoch")
+                axes[col2].set_ylabel("probability")
+                axes[col2].legend()
+            else:
+                axes[col2].set_visible(False)
+
+            # Plot example RT distributions
+            for i in range(len(summary["rt_dict"]["mnle_lps"])):
+                y = np.exp(np.array(summary["rt_dict"]["mnle_lps"][i]))
+                axes[col3].plot(y, c='tab:red')#, label="mnle probs")
+                if len(summary["rt_dict"]["true_lps"]) > 0:
+                    y = np.exp(np.array(summary["rt_dict"]["true_lps"][i]))
+                    axes[col3].plot(y, c='tab:blue', linestyle="--")#, label="true probs")
+            axes[col3].set_xlabel("datapoint number")
+            axes[col3].set_ylabel("probability")
+            axes[col3].legend()
+
+            plt.rc('legend',fontsize=8)
+            plt.tight_layout()
+            plt.show()
+
+    @staticmethod
+    def _maybe_plot_training_dynamic(show_plot: bool, summary: Dict, monitoring_interval:int = 10) -> None:
+        if show_plot:
+            fig, axes = plt.subplots(1, 3)
+
+            clear_output(wait=True)
+
+            col1 = 1
+            col2 = 2
+            col3 = 0
+
+            # Plot training and validation losses
+            x = np.arange(1, len(np.array(summary["training_log_probs"]))+1)
+            x2 = np.array(summary["running_num_simulations"])
+            y = np.array(summary["training_log_probs"])
+            axes[col1].plot(x, y, c='tab:blue', label="training loss")
+            if len(summary["validation_log_probs"]) > 0:
+                x = x[::monitoring_interval]
+                y = np.array(summary["validation_log_probs"])
+                axes[col1].plot(x, y, c='tab:orange', label="validation loss")
+            if len(summary["theo_log_probs"]) > 0:
+                y = np.array(summary["theo_log_probs"])
+                axes[col1].scatter(x, y, c='k', s=5, label="analytical log-likelihood")
+            try:
+                ax2 = axes[col1].twiny()
+                ax2.set_xlabel("number of simulations")
+                ticklabels = x2[0], x2[int(len(x2)*0.5)], x2[-1]
+                ax2.set_xticks(np.linspace(0, len(x2), num=3))
+                ax2.set_xticklabels(ticklabels)
+            except:
+                pass
+            axes[col1].set_xlabel("epoch")
+            axes[col1].set_ylabel("probability")
+            axes[col1].legend()
+
+            # Plot Huber loss
+            axes[col2].set_ylim(bottom=0, top=0.04)
+            if len(summary["validation_huber_probs"]) > 0:
+                y = np.mean(np.array(summary["validation_huber_probs"]), axis=1)
+                axes[col2].plot(x, y, c='tab:red', label="huber loss")
+                axes[col2].set_xlabel("epoch")
+                axes[col2].set_ylabel("probability")
+                axes[col2].legend()
+            else:
+                axes[col2].set_visible(False)
+
+            # Plot example RT distributions
+            for i in range(len(summary["rt_dict"]["mnle_lps"])):
+                y = np.exp(np.array(summary["rt_dict"]["mnle_lps"][i]))
+                axes[col3].plot(y, c='tab:red')#, label="mnle probs")
+                if len(summary["rt_dict"]["true_lps"]) > 0:
+                    y = np.exp(np.array(summary["rt_dict"]["true_lps"][i]))
+                    axes[col3].plot(y, c='tab:blue', linestyle="--")#, label="true probs")
+            axes[col3].set_xlabel("datapoint number")
+            axes[col3].set_ylabel("probability")
+            axes[col3].legend()
+
+            plt.rc('legend',fontsize=8)
+            plt.tight_layout()
+            plt.show()
+
+    @staticmethod
+    def _maybe_save_analytical_lps(analytical_likelihood, theta: Tensor, x: Tensor, summary: Dict) -> None:
+        if analytical_likelihood is not None:
+            theoretical_c_probs, theoretical_probs = analytical_likelihood(parameters=theta, data=x, discrete_lps=True)
+            mean_theoretical_probs = theoretical_probs.mean()
+            mean_theoretical_c_probs = theoretical_c_probs.mean()
+            summary["theo_log_probs"].append(mean_theoretical_probs)
+            summary["theo_c_log_probs"].append(mean_theoretical_c_probs)
+
     def _report_convergence_at_end(
         self, epoch: int, stop_after_epochs: int, max_num_epochs: int
     ) -> None:
         if self._converged(epoch, stop_after_epochs):
+            print(
+                "\r",
+                f"Neural network successfully converged after {epoch} epochs.",
+                end="",
+            )
+        elif max_num_epochs == epoch:
+            warn(
+                "Maximum number of epochs `max_num_epochs={max_num_epochs}` reached,"
+                "but network has not yet fully converged. Consider increasing it."
+            )
+
+    def _report_online_convergence_at_end(
+        self, epoch: int, max_num_epochs: int, min_training_std: float, min_training_ma_std: float,
+    ) -> None:
+        if self._converged_online(epoch, min_training_std, min_training_ma_std,):
+            print(
+                "\r",
+                f"Neural network successfully converged after {epoch} epochs.",
+                end="",
+            )
+        elif max_num_epochs == epoch:
+            warn(
+                "Maximum number of epochs `max_num_epochs={max_num_epochs}` reached,"
+                "but network has not yet fully converged. Consider increasing it."
+            )
+
+    def _report_dynamic_convergence_at_end(
+        self, epoch: int, max_num_epochs: int, min_training_std: float, min_training_ma_std: float,
+    ) -> None:
+        if self._converged_dynamically(epoch, min_training_std, min_training_ma_std,):
             print(
                 "\r",
                 f"Neural network successfully converged after {epoch} epochs.",
@@ -395,6 +958,134 @@ class NeuralInference(ABC):
                 scalar_value=vlp,
                 global_step=offset + i,
             )
+
+        for i, tlp in enumerate(self._summary["training_log_probs"][offset:]):
+            self._summary_writer.add_scalar(
+                tag="training_log_probs",
+                scalar_value=tlp,
+                global_step=offset + i,
+            )
+
+        for i, eds in enumerate(self._summary["epoch_durations_sec"][offset:]):
+            self._summary_writer.add_scalar(
+                tag="epoch_durations_sec",
+                scalar_value=eds,
+                global_step=offset + i,
+            )
+
+        self._summary_writer.flush()
+
+    def _summarize_online(
+        self,
+        round_: int,
+    ) -> None:
+        """Update the summary_writer with statistics for a given round.
+
+        During training several performance statistics are added to the summary, e.g.,
+        using `self._summary['key'].append(value)`. This function writes these values
+        into summary writer object.
+
+        Args:
+            round: index of round
+
+        Scalar tags:
+            - epochs_trained:
+                number of epochs trained
+            - best_validation_log_prob:
+                best validation log prob (for each round).
+            - validation_log_probs:
+                validation log probs for every epoch (for each round).
+            - training_log_probs
+                training log probs for every epoch (for each round).
+            - epoch_durations_sec
+                epoch duration for every epoch (for each round)
+
+        """
+
+        # Add most recent training stats to summary writer.
+        self._summary_writer.add_scalar(
+            tag="epochs_trained",
+            scalar_value=self._summary["epochs_trained"][-1],
+            global_step=round_ + 1,
+        )
+
+        self._summary_writer.add_scalar(
+            tag="best_training_log_prob",
+            scalar_value=self._summary["best_training_log_prob"][-1],
+            global_step=round_ + 1,
+        )
+
+        # Add validation log prob for every epoch.
+        # Offset with all previous epochs.
+        offset = (
+            torch.tensor(self._summary["epochs_trained"][:-1], dtype=torch.int)
+            .sum()
+            .item()
+        )
+
+        for i, tlp in enumerate(self._summary["training_log_probs"][offset:]):
+            self._summary_writer.add_scalar(
+                tag="training_log_probs",
+                scalar_value=tlp,
+                global_step=offset + i,
+            )
+
+        for i, eds in enumerate(self._summary["epoch_durations_sec"][offset:]):
+            self._summary_writer.add_scalar(
+                tag="epoch_durations_sec",
+                scalar_value=eds,
+                global_step=offset + i,
+            )
+
+        self._summary_writer.flush()
+
+    def _summarize_dynamic(
+        self,
+        round_: int,
+    ) -> None:
+        """Update the summary_writer with statistics for a given round.
+
+        During training several performance statistics are added to the summary, e.g.,
+        using `self._summary['key'].append(value)`. This function writes these values
+        into summary writer object.
+
+        Args:
+            round: index of round
+
+        Scalar tags:
+            - epochs_trained:
+                number of epochs trained
+            - best_validation_log_prob:
+                best validation log prob (for each round).
+            - validation_log_probs:
+                validation log probs for every epoch (for each round).
+            - training_log_probs
+                training log probs for every epoch (for each round).
+            - epoch_durations_sec
+                epoch duration for every epoch (for each round)
+
+        """
+
+        # Add most recent training stats to summary writer.
+        self._summary_writer.add_scalar(
+            tag="epochs_trained",
+            scalar_value=self._summary["epochs_trained"][-1],
+            global_step=round_ + 1,
+        )
+
+        self._summary_writer.add_scalar(
+            tag="best_training_log_prob",
+            scalar_value=self._summary["best_training_log_prob"][-1],
+            global_step=round_ + 1,
+        )
+
+        # Add validation log prob for every epoch.
+        # Offset with all previous epochs.
+        offset = (
+            torch.tensor(self._summary["epochs_trained"][:-1], dtype=torch.int)
+            .sum()
+            .item()
+        )
 
         for i, tlp in enumerate(self._summary["training_log_probs"][offset:]):
             self._summary_writer.add_scalar(

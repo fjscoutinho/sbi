@@ -27,6 +27,7 @@ def build_mnle(
     hidden_layers: int = 2,
     tail_bound: float = 10.0,
     log_transform_x: bool = True,
+    activation_fun_cnet: nn.Module = nn.Sigmoid(),
     **kwargs,
 ):
     """Returns a density estimator for mixed data types.
@@ -46,6 +47,7 @@ def build_mnle(
         tail_bound: spline tail bound for NSF.
         log_transform_x: whether to apply a log-transform to x to move it to unbounded
             space, e.g., in case x consists of reaction time data (bounded by zero).
+        activation_fun_cnet: activation function in the discrete net.
 
     Returns:
         MixedDensityEstimator: nn.Module for performing MNLE.
@@ -77,6 +79,7 @@ def build_mnle(
         num_hidden=hidden_features,
         num_layers=hidden_layers,
         embedding=embedding,
+        activation_fun_cnet=activation_fun_cnet,
     )
 
     # Set up a NSF for modelling the continuous data, conditioned on the discrete data.
@@ -115,6 +118,7 @@ class CategoricalNet(nn.Module):
         num_hidden: int = 20,
         num_layers: int = 2,
         embedding: Optional[nn.Module] = None,
+        activation_fun_cnet: nn.Module = nn.Sigmoid(),
     ):
         """Initialize the neural net.
 
@@ -129,7 +133,7 @@ class CategoricalNet(nn.Module):
 
         self.num_hidden = num_hidden
         self.num_input = num_input
-        self.activation = Sigmoid()
+        self.activation = activation_fun_cnet
         self.softmax = Softmax(dim=1)
         self.num_categories = num_categories
 
