@@ -39,6 +39,11 @@ class LikelihoodEstimator(NeuralInference, ABC):
         logging_level: Union[int, str] = "WARNING",
         summary_writer: Optional[SummaryWriter] = None,
         show_progress_bars: bool = True,
+        hidden_features: int = 50,
+        hidden_layers: int = 2,
+        num_transforms: int = 5,
+        num_bins: int = 10,
+        activation_fun_cnet: nn = nn.Sigmoid(),
     ):
         r"""Base class for Sequential Neural Likelihood Estimation methods.
 
@@ -74,7 +79,13 @@ class LikelihoodEstimator(NeuralInference, ABC):
         # potentially for z-scoring.
         check_estimator_arg(density_estimator)
         if isinstance(density_estimator, str):
-            self._build_neural_net = utils.likelihood_nn(model=density_estimator)
+            self._build_neural_net = utils.likelihood_nn(
+                model=density_estimator,
+                hidden_features=hidden_features,
+                hidden_layers=hidden_layers,
+                num_transforms=num_transforms,
+                num_bins=num_bins,
+                activation_fun_cnet=activation_fun_cnet)
         else:
             self._build_neural_net = density_estimator
 

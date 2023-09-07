@@ -6,6 +6,7 @@ from copy import deepcopy
 from typing import Any, Callable, Dict, Optional, Union
 
 from torch.distributions import Distribution
+from torch import nn
 
 from sbi.inference.posteriors import MCMCPosterior, RejectionPosterior, VIPosterior
 from sbi.inference.potentials import mixed_likelihood_estimator_based_potential
@@ -24,6 +25,11 @@ class MNLE(LikelihoodEstimator):
         logging_level: Union[int, str] = "WARNING",
         summary_writer: Optional[TensorboardSummaryWriter] = None,
         show_progress_bars: bool = True,
+        hidden_features: int = 50,
+        hidden_layers: int = 2,
+        num_transforms: int = 5,
+        num_bins: int = 10,
+        activation_fun_cnet: nn = nn.Sigmoid(),
     ):
         r"""Mixed Neural Likelihood Estimation (MNLE) [1].
 
