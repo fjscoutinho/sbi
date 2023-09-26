@@ -733,9 +733,9 @@ class NeuralInference(ABC):
     @staticmethod
     def _maybe_plot_training(show_plot: bool, summary: Dict) -> None:
         if show_plot:
-            fig, axes = plt.subplots(1, 3)
-
             clear_output(wait=True)
+
+            fig, axes = plt.subplots(1, 3)
 
             col1 = 1
             col2 = 2
@@ -788,14 +788,17 @@ class NeuralInference(ABC):
 
             plt.rc('legend',fontsize=8)
             plt.tight_layout()
-            plt.show()
+
+            plt.show(block=False)
+            #plt.pause(1)
+
 
     @staticmethod
     def _maybe_plot_training_dynamic(show_plot: bool, summary: Dict, monitoring_interval:int = 10) -> None:
         if show_plot:
+            
+            plt.close()
             fig, axes = plt.subplots(1, 3)
-
-            clear_output(wait=True)
 
             col1 = 1
             col2 = 2
@@ -849,16 +852,32 @@ class NeuralInference(ABC):
 
             plt.rc('legend',fontsize=8)
             plt.tight_layout()
-            plt.show()
+
+            plt.show(block=False)
+            plt.pause(1)
+
+            clear_output(wait=True)
 
     @staticmethod
     def _maybe_save_analytical_lps(analytical_likelihood, theta: Tensor, x: Tensor, summary: Dict) -> None:
         if analytical_likelihood is not None:
-            theoretical_c_probs, theoretical_probs = analytical_likelihood(parameters=theta, data=x, discrete_lps=True)
-            mean_theoretical_probs = theoretical_probs.mean()
-            mean_theoretical_c_probs = theoretical_c_probs.mean()
-            summary["theo_log_probs"].append(mean_theoretical_probs)
-            summary["theo_c_log_probs"].append(mean_theoretical_c_probs)
+            try: 
+                theoretical_c_probs, theoretical_probs = analytical_likelihood(parameters=theta, data=x, discrete_lps=True)
+                mean_theoretical_probs = theoretical_probs.mean()
+                mean_theoretical_c_probs = theoretical_c_probs.mean()
+                summary["theo_log_probs"].append(mean_theoretical_probs)
+                summary["theo_c_log_probs"].append(mean_theoretical_c_probs)
+            except:
+                x2d = deepcopy(x)
+                # abs rts in first and only column
+                x = x2d[:, 0]
+                # 0 - 1 code into sign
+                x[x2d[:, 1] < 1] *= -1
+                ## reshape into 1, num_trials 
+                x = torch.reshape(x, (1, -1))
+                theoretical_probs = analytical_likelihood(parameters=theta, data=x)
+                mean_theoretical_probs = theoretical_probs.mean()
+                summary["theo_log_probs"].append(mean_theoretical_probs)
 
     def _report_convergence_at_end(
         self, epoch: int, stop_after_epochs: int, max_num_epochs: int
