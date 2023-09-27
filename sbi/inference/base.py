@@ -868,14 +868,22 @@ class NeuralInference(ABC):
                 summary["theo_log_probs"].append(mean_theoretical_probs)
                 summary["theo_c_log_probs"].append(mean_theoretical_c_probs)
             except:
+                import time
                 x2d = deepcopy(x)
                 # abs rts in first and only column
-                x = x2d[:, 0]
+                x1d = x2d[:, 0]
                 # 0 - 1 code into sign
-                x[x2d[:, 1] < 1] *= -1
+                x1d[x2d[:, 1] < 1] *= -1
                 ## reshape into 1, num_trials 
-                x = torch.reshape(x, (1, -1))
-                theoretical_probs = analytical_likelihood(parameters=theta, data=x)
+                x1d = torch.reshape(x1d, (1, -1))
+
+                # Compute analytical log probabilities
+                theoretical_probs = torch.concatenate(
+                    [
+                        analytical_likelihood(parameters=theta[idx:idx+1,:], data=x1d[:,idx:idx+1])#, l_lower_bound=np.exp(LL_LOWER_BOUND))
+                        for idx in range(len(theta))
+                    ]
+                )
                 mean_theoretical_probs = theoretical_probs.mean()
                 summary["theo_log_probs"].append(mean_theoretical_probs)
 

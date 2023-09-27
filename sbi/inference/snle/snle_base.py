@@ -433,6 +433,7 @@ class LikelihoodEstimator(NeuralInference, ABC):
                 )
                 # Evaluate on x with theta as context.
                 train_losses = self._loss(theta=theta_batch, x=x_batch)
+                #train_losses = torch.nan_to_num(train_losses)
                 train_loss = torch.mean(train_losses)
                 train_log_probs_sum -= train_losses.sum().item()
 
@@ -446,7 +447,6 @@ class LikelihoodEstimator(NeuralInference, ABC):
 
                 # Log training log prob for each minibatch.
                 self._summary["all_training_log_probs"].append(train_losses.tolist())
-
                 self._running_num_simulations += len(train_losses)
                 self._summary["running_num_simulations"].append(self._running_num_simulations)
 
@@ -487,10 +487,11 @@ class LikelihoodEstimator(NeuralInference, ABC):
                     )
                     # Evaluate on x with theta as context.
                     val_losses = self._loss(theta=theta_batch, x=x_batch)
+                    #val_losses = torch.nan_to_num(val_losses)
                     val_log_prob_sum -= val_losses.sum().item()
 
                     # Log validation log prob for each minibatch.
-                    self._summary["all_validation_log_probs"].append(train_losses.tolist())
+                    self._summary["all_validation_log_probs"].append(val_losses.tolist())
 
             # Take mean over all validation samples.
             self._val_log_prob = val_log_prob_sum / (
@@ -643,6 +644,7 @@ class LikelihoodEstimator(NeuralInference, ABC):
                 )
                 # Evaluate on x with theta as context.
                 train_losses = self._loss(theta=theta_batch, x=x_batch)
+                train_losses = torch.nan_to_num(train_losses)
                 train_loss = torch.mean(train_losses)
                 train_log_probs_sum -= train_losses.sum().item()
 
@@ -656,7 +658,6 @@ class LikelihoodEstimator(NeuralInference, ABC):
 
                 # Log training log prob for each minibatch.
                 self._summary["all_training_log_probs"].append(train_losses.tolist())
-
                 self._running_num_simulations += len(train_losses)
                 self._summary["running_num_simulations"].append(self._running_num_simulations)
 
@@ -697,10 +698,11 @@ class LikelihoodEstimator(NeuralInference, ABC):
                     )
                     # Evaluate on x with theta as context.
                     val_losses = self._loss(theta=theta_batch, x=x_batch)
+                    val_losses = torch.nan_to_num(val_losses)
                     val_log_prob_sum -= val_losses.sum().item()
 
                     # Log validation log prob for each minibatch.
-                    self._summary["all_validation_log_probs"].append(train_losses.tolist())
+                    self._summary["all_validation_log_probs"].append(val_losses.tolist())
 
             # Take mean over all validation samples.
             self._val_log_prob = val_log_prob_sum / (
@@ -855,6 +857,7 @@ class LikelihoodEstimator(NeuralInference, ABC):
 
             # Evaluate on x with theta as context.
             train_losses = self._loss(theta=theta_batch, x=x_batch)
+            train_losses = torch.nan_to_num(train_losses)
             train_loss = torch.mean(train_losses)
             train_log_probs_sum -= train_losses.sum().item()
 
@@ -917,6 +920,7 @@ class LikelihoodEstimator(NeuralInference, ABC):
                         )
                         # Evaluate on x with theta as context.
                         val_losses = self._loss(theta=theta_batch, x=x_batch)
+                        val_losses = torch.nan_to_num(val_losses)
                         val_log_prob_sum -= val_losses.sum().item()
 
                         # Log validation log prob for each minibatch.
