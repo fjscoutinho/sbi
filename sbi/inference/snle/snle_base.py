@@ -415,6 +415,7 @@ class LikelihoodEstimator(NeuralInference, ABC):
             )
             self.epoch, self._total_num_simulations, self._total_num_effective_sims, self._running_num_simulations, self._train_log_prob, self._val_log_prob = 0, 0, 0, 0, float("-Inf"), float("-Inf")
 
+        t0 = time.time()
         # while self.epoch < max_num_epochs and not self._converged(
         #     self.epoch, stop_after_epochs
         # ):
@@ -506,6 +507,9 @@ class LikelihoodEstimator(NeuralInference, ABC):
             self._maybe_plot_training(show_plot=show_train_plot, summary=self._summary)# Plot training, validation and Huber losses
             self._maybe_show_progress(self._show_progress_bars, self.epoch)
 
+            t3 = time.time()
+            self._summary["total_epoch_durations_sec"].append(t3-t1)
+
         self._report_convergence_at_end(self.epoch, stop_after_epochs, max_num_epochs)
 
         # Update summary.
@@ -526,6 +530,9 @@ class LikelihoodEstimator(NeuralInference, ABC):
         # Avoid keeping the gradients in the resulting network, which can
         # cause memory leakage when benchmarking.
         self._neural_net.zero_grad(set_to_none=True)
+
+        t4 = time.time()
+        self._summary["training_duration_sec"].append(t4-t0)
 
         return deepcopy(self._neural_net)
 
@@ -615,6 +622,7 @@ class LikelihoodEstimator(NeuralInference, ABC):
             )
             self.epoch, self._total_num_simulations, self._total_num_effective_sims, self._running_num_simulations, self._train_log_prob_dn, self._train_log_prob_cn, self._train_log_prob, self._val_log_prob = 0, 0, 0, 0, float("-Inf"), float("-Inf"), float("-Inf"), float("-Inf")
 
+        t0 = time.time()
         # while self.epoch < max_num_epochs and not self._converged_online(
         #     self.epoch, min_training_std, min_training_ma_std,
         # ):
@@ -720,6 +728,9 @@ class LikelihoodEstimator(NeuralInference, ABC):
             # Remove simulations currently stored before the next epoch.
             self.un_append_simulations()
 
+            t3 = time.time()
+            self._summary["total_epoch_durations_sec"].append(t3-t1)
+
         self._report_online_convergence_at_end(self.epoch, max_num_epochs, min_training_std, min_training_ma_std)
 
         # Update summary.
@@ -740,6 +751,9 @@ class LikelihoodEstimator(NeuralInference, ABC):
         # Avoid keeping the gradients in the resulting network, which can
         # cause memory leakage when benchmarking.
         self._neural_net.zero_grad(set_to_none=True)
+
+        t4 = time.time()
+        self._summary["training_duration_sec"].append(t4-t0)
 
         return deepcopy(self._neural_net)
 
@@ -831,6 +845,7 @@ class LikelihoodEstimator(NeuralInference, ABC):
             )
             self.epoch, self._total_num_simulations, self._total_num_effective_sims, self._running_num_simulations, self._training_batch_size, self._train_log_prob_dn, self._train_log_prob_cn, self._train_log_prob = 0, 0, 0, 0, starting_training_batch_size, float("-Inf"), float("-Inf"), float("-Inf")
 
+        t0 = time.time()
         while self._running_num_simulations < max_num_simulations and not self._converged_dynamically(self.epoch, min_training_std, min_training_ma_std,):
             #max_num_epochs: # and not self._converged_dynamically(
             # self.epoch, min_training_std, min_training_ma_std,
@@ -939,6 +954,9 @@ class LikelihoodEstimator(NeuralInference, ABC):
                 self._maybe_plot_training_dynamic(show_plot=show_train_plot, summary=self._summary, monitoring_interval=monitoring_interval)# Plot training, validation and Huber losses
                 self._maybe_show_progress(self._show_progress_bars, self.epoch)
 
+            t3 = time.time()
+            self._summary["total_epoch_durations_sec"].append(t3-t1)
+
         self._report_dynamic_convergence_at_end(self.epoch, max_num_epochs, min_training_std, min_training_ma_std)
 
         # Update summary.
@@ -959,6 +977,9 @@ class LikelihoodEstimator(NeuralInference, ABC):
         # Avoid keeping the gradients in the resulting network, which can
         # cause memory leakage when benchmarking.
         self._neural_net.zero_grad(set_to_none=True)
+
+        t4 = time.time()
+        self._summary["training_duration_sec"].append(t4-t0)
 
         return deepcopy(self._neural_net)
 

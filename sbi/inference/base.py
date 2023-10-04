@@ -155,6 +155,8 @@ class NeuralInference(ABC):
             epochs=[],
             epochs_trained=[],
             epoch_durations_sec=[],
+            total_epoch_durations_sec=[],
+            training_duration_sec=[],
             all_training_log_probs=[],
             training_log_probs=[],
             best_training_log_prob=[],
