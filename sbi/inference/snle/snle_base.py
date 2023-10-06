@@ -31,8 +31,8 @@ from sbi.utils import (
 
 import time
 import numpy as np
-from scripts import score_mnle_function_2D_DDM
-from score_mnle_function_2D_DDM import score_mnle, visualise_mnle
+from scripts import score_mnle_function_xD_DDM
+from score_mnle_function_xD_DDM import score_mnle, visualise_mnle
 from sbi.inference.base import simulate_for_sbi
 from IPython.display import clear_output
 
