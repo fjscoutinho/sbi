@@ -457,6 +457,8 @@ class MCMCPosterior(NeuralPosterior):
 
         num_chains, dim_samples = initial_params.shape
 
+        #print("initial params shape", initial_params.shape)
+
         if not vectorized:
             SliceSamplerMultiChain = SliceSamplerSerial
         else:
@@ -475,8 +477,13 @@ class MCMCPosterior(NeuralPosterior):
         num_samples_ = ceil((num_samples * thin) / num_chains)
         # Run mcmc including warmup
         samples = posterior_sampler.run(warmup_ + num_samples_)
+        #print("wu steps", warmup_steps, "thin", thin, "num samps", num_samples, "num chains", num_chains, "ceil", ceil((num_samples * thin) / num_chains), "wu_", warmup_, "num samps _", num_samples_)
+        #print("wu inc uncollated samples", samples)
+        #print("wu inc uncollated samples shape", samples.shape)
         samples = samples[:, warmup_steps:, :]  # discard warmup steps
         samples = torch.from_numpy(samples)  # chains x samples x dim
+        #print("uncollated samples", samples)
+        #print("uncollated samples shape", samples.shape)
 
         # Save posterior sampler.
         self._posterior_sampler = posterior_sampler
@@ -486,6 +493,8 @@ class MCMCPosterior(NeuralPosterior):
 
         # Collect samples from all chains.
         samples = samples.reshape(-1, dim_samples)[:num_samples, :]
+        #print("samples", samples)
+        #print("samples shape", samples.shape)
         assert samples.shape[0] == num_samples
 
         return samples.type(torch.float32).to(self._device)

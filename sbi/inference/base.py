@@ -289,7 +289,7 @@ class NeuralInference(ABC):
         val_loader = data.DataLoader(dataset, **val_loader_kwargs)
 
         return train_loader, val_loader
-    
+
     def get_dataloaders_online(
         self,
         starting_round: int = 0,
@@ -714,7 +714,7 @@ class NeuralInference(ABC):
 
     @staticmethod
     def _maybe_save_metrics(score_mnle, neural_net, summary: Dict, metrics_dictionary:  Dict) -> None:
-        if metrics_dictionary is not None and metrics_dictionary["save_metrics"] == True:
+        if metrics_dictionary is not None and metrics_dictionary["log_likelihood"] is not None and metrics_dictionary["save_metrics"] == True:
             # Calculate Huber validation performance with independently drawn parameters and data.
             _val_errors, _ = score_mnle(neural_net, metrics_dictionary)
             _val_huber_probs = _val_errors[:,1]
@@ -723,7 +723,7 @@ class NeuralInference(ABC):
             summary["validation_huber_probs"].append(_val_huber_probs)
 
     @staticmethod
-    def _maybe_compute_example_RTs(visualise_mnle, neural_net, summary: Dict, metrics_dictionary:  Dict) -> None:
+    def _maybe_compute_example_RTs(visualise_mnle, neural_net, summary: Dict, metrics_dictionary: Dict) -> None:
         if metrics_dictionary is not None:
             # Calculate Huber validation performance with independently drawn parameters
             # and data.
@@ -767,7 +767,7 @@ class NeuralInference(ABC):
             axes[col1].legend()
 
             # Plot Huber loss
-            axes[col2].set_ylim(bottom=0, top=0.04)
+            axes[col2].set_ylim(bottom=0)#, top=0.04)
             if len(summary["validation_huber_probs"]) > 0:
                 y = np.mean(np.array(summary["validation_huber_probs"]), axis=1)
                 axes[col2].plot(x, y, c='tab:red', label="huber loss")
