@@ -831,7 +831,7 @@ class NeuralInference(ABC):
             axes[col1].legend()
 
             # Plot Huber loss
-            axes[col2].set_ylim(bottom=0, top=0.04)
+            axes[col2].set_ylim(bottom=0)#, top=0.04)
             if len(summary["validation_huber_probs"]) > 0:
                 y = np.mean(np.array(summary["validation_huber_probs"]), axis=1)
                 axes[col2].plot(x, y, c='tab:red', label="huber loss")
@@ -870,7 +870,7 @@ class NeuralInference(ABC):
                 summary["theo_log_probs"].append(mean_theoretical_probs)
                 summary["theo_c_log_probs"].append(mean_theoretical_c_probs)
             except:
-                import time
+                #import time
                 x2d = deepcopy(x)
                 # abs rts in first and only column
                 x1d = x2d[:, 0]
