@@ -1173,12 +1173,56 @@ class NeuralInference(ABC):
         self.__dict__ = state_dict
 
 
+# def simulate_for_sbi(
+#     simulator: Callable,
+#     proposal: Any,
+#     num_simulations: int,
+#     num_workers: int = 1,
+#     simulation_batch_size: int = 1,
+#     show_progress_bar: bool = True,
+# ) -> Tuple[Tensor, Tensor]:
+#     r"""Returns ($\theta, x$) pairs obtained from sampling the proposal and simulating.
+
+#     This function performs two steps:
+
+#     - Sample parameters $\theta$ from the `proposal`.
+#     - Simulate these parameters to obtain $x$.
+
+#     Args:
+#         simulator: A function that takes parameters $\theta$ and maps them to
+#             simulations, or observations, `x`, $\text{sim}(\theta)\to x$. Any
+#             regular Python callable (i.e. function or class with `__call__` method)
+#             can be used.
+#         proposal: Probability distribution that the parameters $\theta$ are sampled
+#             from.
+#         num_simulations: Number of simulations that are run.
+#         num_workers: Number of parallel workers to use for simulations.
+#         simulation_batch_size: Number of parameter sets that the simulator
+#             maps to data x at once. If None, we simulate all parameter sets at the
+#             same time. If >= 1, the simulator has to process data of shape
+#             (simulation_batch_size, parameter_dimension).
+#         show_progress_bar: Whether to show a progress bar for simulating. This will not
+#             affect whether there will be a progressbar while drawing samples from the
+#             proposal.
+
+#     Returns: Sampled parameters $\theta$ and simulation-outputs $x$.
+#     """
+
+#     theta = proposal.sample((num_simulations,))
+
+#     x = simulate_in_batches(
+#         simulator, theta, simulation_batch_size, num_workers, show_progress_bar
+#     )
+
+#     return theta, x
+
 def simulate_for_sbi(
     simulator: Callable,
     proposal: Any,
     num_simulations: int,
     num_workers: int = 1,
     simulation_batch_size: int = 1,
+    seed: Optional[int] = None,
     show_progress_bar: bool = True,
 ) -> Tuple[Tensor, Tensor]:
     r"""Returns ($\theta, x$) pairs obtained from sampling the proposal and simulating.
@@ -1201,6 +1245,7 @@ def simulate_for_sbi(
             maps to data x at once. If None, we simulate all parameter sets at the
             same time. If >= 1, the simulator has to process data of shape
             (simulation_batch_size, parameter_dimension).
+        seed: Seed for reproducibility.
         show_progress_bar: Whether to show a progress bar for simulating. This will not
             affect whether there will be a progressbar while drawing samples from the
             proposal.
@@ -1211,7 +1256,12 @@ def simulate_for_sbi(
     theta = proposal.sample((num_simulations,))
 
     x = simulate_in_batches(
-        simulator, theta, simulation_batch_size, num_workers, show_progress_bar
+        simulator=simulator,
+        theta=theta,
+        sim_batch_size=simulation_batch_size,
+        num_workers=num_workers,
+        seed=seed,
+        show_progress_bars=show_progress_bar,
     )
 
     return theta, x

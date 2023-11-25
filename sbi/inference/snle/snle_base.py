@@ -31,10 +31,9 @@ from sbi.utils import (
 
 import time
 import numpy as np
-from scripts import score_mnle_function_2D_DDM
-from score_mnle_function_2D_DDM import score_mnle, visualise_mnle
 from sbi.inference.base import simulate_for_sbi
 from IPython.display import clear_output
+from multiprocessing import cpu_count
 
 
 class LikelihoodEstimator(NeuralInference, ABC):
@@ -351,8 +350,10 @@ class LikelihoodEstimator(NeuralInference, ABC):
         show_train_summary: bool = False,
         dataloader_kwargs: Optional[Dict] = None,
         use_amsgrad: bool = False,
-        show_train_plot: bool = True,
+        show_train_plot: bool = False,
         metrics_dictionary: Optional[Dict] = None,
+        visualise_mnle = None,
+        score_mnle = None,
     ) -> flows.Flow:
         r"""Train the density estimator to learn the distribution $p(x|\theta)$.
 
@@ -555,8 +556,10 @@ class LikelihoodEstimator(NeuralInference, ABC):
         dataloader_kwargs: Optional[Dict] = None,
         use_amsgrad: bool = False,
         num_simulations: int = 0,
-        show_train_plot: bool = True,
+        show_train_plot: bool = False,
         metrics_dictionary: Optional[Dict] = None,
+        visualise_mnle = None,
+        score_mnle = None,
     ) -> flows.Flow:
         r"""Train the density estimator to learn the distribution $p(x|\theta)$.
 
@@ -777,9 +780,11 @@ class LikelihoodEstimator(NeuralInference, ABC):
         show_train_summary: bool = False,
         dataloader_kwargs: Optional[Dict] = None,
         use_amsgrad: bool = False,
-        show_train_plot: bool = True,
+        show_train_plot: bool = False,
         metrics_dictionary: Optional[Dict] = None,
         monitoring_interval: int = 10,
+        visualise_mnle = None,
+        score_mnle = None,
     ) -> flows.Flow:
         r"""Train the density estimator to learn the distribution $p(x|\theta)$.
 
@@ -845,6 +850,8 @@ class LikelihoodEstimator(NeuralInference, ABC):
             )
             self.epoch, self._total_num_simulations, self._total_num_effective_sims, self._running_num_simulations, self._training_batch_size, self._train_log_prob_dn, self._train_log_prob_cn, self._train_log_prob = 0, 0, 0, 0, starting_training_batch_size, float("-Inf"), float("-Inf"), float("-Inf")
 
+        num_workers = cpu_count()-1
+
         t0 = time.time()
         while self._running_num_simulations < max_num_simulations and not self._converged_dynamically(self.epoch, min_training_std, min_training_ma_std,):
             #max_num_epochs: # and not self._converged_dynamically(
@@ -858,8 +865,23 @@ class LikelihoodEstimator(NeuralInference, ABC):
             if self._training_batch_size > max_training_batch_size:
                 self._training_batch_size = max_training_batch_size
 
+            num_simulations = self._training_batch_size
+            simulation_batch_size = int(np.ceil(num_simulations/100))
+            num_simulations -= (num_simulations % simulation_batch_size)
+
+            #print("th x sh 0", num_simulations, simulation_batch_size)
+
             # Simulate parameter-data pairs and append them.
-            theta, x = simulate_for_sbi(simulator=self._simulator, proposal=self._prior, num_simulations=self._training_batch_size)
+            theta, x = simulate_for_sbi(
+                simulator=self._simulator, 
+                proposal=self._prior, 
+                num_simulations=num_simulations, simulation_batch_size=simulation_batch_size,
+                num_workers=num_workers,
+                )
+            
+            #print("th x sh 1", theta.shape, x.shape)
+
+            #theta, x = clean_simulations(theta, x)
 
             #clear_output(wait=True)
 
@@ -948,7 +970,7 @@ class LikelihoodEstimator(NeuralInference, ABC):
                 # Log validation log prob for every epoch.
                 self._summary["validation_log_probs"].append(self._val_log_prob)
 
-                self._maybe_save_metrics(score_mnle, self._neural_net, summary=self._summary, metrics_dictionary=metrics_dictionary) # Huber loss
+                self._maybe_save_metrics(score_mnle=score_mnle, neural_net=self._neural_net, summary=self._summary, metrics_dictionary=metrics_dictionary) # Huber loss
                 self._maybe_save_analytical_lps(analytical_likelihood=self._likelihood, theta=theta, x=x, summary=self._summary) # Analytical likelihood
                 self._maybe_compute_example_RTs(visualise_mnle=visualise_mnle, neural_net=self._neural_net, summary=self._summary, metrics_dictionary=metrics_dictionary) # Example RT distributions
                 self._maybe_plot_training_dynamic(show_plot=show_train_plot, summary=self._summary, monitoring_interval=monitoring_interval)# Plot training, validation and Huber losses

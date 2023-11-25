@@ -72,7 +72,7 @@ def simulate_in_batches(
                 )
             ) as _:
                 simulation_outputs = Parallel(n_jobs=num_workers)(
-                    delayed(simulator_seeded)(batch, batch_seed)
+                    delayed(simulator_seeded)(batch, batch_seed.item())
                     for batch, batch_seed in zip(batches, batch_seeds)
                 )
         else:
