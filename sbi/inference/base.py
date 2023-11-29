@@ -779,12 +779,14 @@ class NeuralInference(ABC):
 
             # Plot example RT distributions
             for i in range(len(summary["rt_dict"]["mnle_lps"])):
+                x = summary["rt_dict"]["rts"]
                 y = np.exp(np.array(summary["rt_dict"]["mnle_lps"][i]))
-                axes[col3].plot(y, c='tab:red')#, label="mnle probs")
+                axes[col3].plot(x, y, c='tab:red')#, label="mnle probs")
                 if len(summary["rt_dict"]["true_lps"]) > 0:
+                    x = summary["rt_dict"]["rts"]
                     y = np.exp(np.array(summary["rt_dict"]["true_lps"][i]))
-                    axes[col3].plot(y, c='tab:blue', linestyle="--")#, label="true probs")
-            axes[col3].set_xlabel("datapoint number")
+                    axes[col3].plot(x, y, c='tab:blue', linestyle="--")#, label="true probs")
+            axes[col3].set_xlabel("rt")
             axes[col3].set_ylabel("probability")
             axes[col3].legend()
 
