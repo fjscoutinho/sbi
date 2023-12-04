@@ -881,8 +881,8 @@ class LikelihoodEstimator(NeuralInference, ABC):
             
             #print("th x sh 1", theta.shape, x.shape)
 
-            print("th", theta)
-            print("x", x)
+            # print("th", theta)
+            # print("x", x)
 
             #theta, x = clean_simulations(theta, x)
 
