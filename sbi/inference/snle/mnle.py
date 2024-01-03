@@ -27,9 +27,11 @@ class MNLE(LikelihoodEstimator):
         show_progress_bars: bool = True,
         hidden_features: int = 50,
         hidden_layers: int = 2,
+        num_categories: int = None,
         num_transforms: int = 5,
         num_bins: int = 10,
         activation_fun_cnet: nn = nn.Sigmoid(),
+        log_transform_x: bool = True,
         simulator: Optional[Callable] = None,
         likelihood: Optional[Callable] = None,
     ):

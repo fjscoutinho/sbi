@@ -25,6 +25,7 @@ def build_mnle(
     num_bins: int = 5,
     hidden_features: int = 50,
     hidden_layers: int = 2,
+    num_categories: int = None,
     tail_bound: float = 10.0,
     log_transform_x: bool = True,
     activation_fun_cnet: nn.Module = nn.Sigmoid(),
@@ -70,7 +71,9 @@ def build_mnle(
 
     # Infer input and output dims.
     dim_parameters = batch_y[0].numel()
-    num_categories = unique(disc_x).numel()
+    if num_categories is None:
+        num_categories = unique(disc_x).numel()
+    #print("num cats", num_categories)
 
     # Set up a categorical RV neural net for modelling the discrete data.
     disc_nle = CategoricalNet(
@@ -187,6 +190,14 @@ class CategoricalNet(nn.Module):
         """
         # Predict categorical ps and evaluate.
         ps = self.forward(theta)
+        #print("neural net", self.discrete_net)
+        #print("neural net num cats", self.discrete_net.num_categories)
+        # print("ps", ps)
+        # print("x", x)
+        # print("th size", theta.shape)
+        # print("ps size", ps.shape)
+        # print("x size", x.shape)
+        # print("squeezed x size", x.squeeze().shape)
         return Categorical(probs=ps).log_prob(x.squeeze())
 
     def sample(self, num_samples: int, theta: Tensor) -> Tensor:
@@ -280,6 +291,7 @@ class MixedDensityEstimator(nn.Module):
 
         return torch.cat((continuous_x, discrete_x), dim=1)
 
+
     def log_prob(self, x: Tensor, context: Tensor) -> Tensor:
         """Return log-probability of samples under the learned MNLE.
 
@@ -326,6 +338,72 @@ class MixedDensityEstimator(nn.Module):
             log_probs_combined -= torch.log(cont_x).squeeze()
 
         return log_probs_combined
+
+
+    # def log_prob(self, x: Tensor, context: Tensor) -> Tensor:
+    #     """Return log-probability of samples under the learned MNLE.
+
+    #     For a fixed data point x this returns the value of the likelihood function
+    #     evaluated at theta, L(theta, x=x).
+
+    #     Alternatively, it can be interpreted as the log-prob of the density
+    #     p(x | theta).
+
+    #     It evaluates the separate density estimator for the discrete and continous part
+    #     of the data and then combines them into one evaluation.
+
+    #     Args:
+    #         x: data (containing continuous and discrete data).
+    #         context: parameters for which to evaluate the likelihod function, or for
+    #             which to condition p(x | theta).
+
+    #     Returns:
+    #         Tensor: log_prob of p(x | theta).
+    #     """
+    #     assert (
+    #         x.shape[0] == context.shape[0]
+    #     ), "x and context must have same batch size."
+
+    #     valid_filter = x[:,0] < 10
+    #     invalid_filter = x[:,0] >= 10
+    #     x_valid = x[valid_filter]  # non-aborts
+    #     context_valid = context[valid_filter]
+    #     x_invalid = x[invalid_filter]  # aborts
+    #     context_invalid = context[invalid_filter]
+    #     #disc_x_invalid = x_invalid[:,1]
+    #     cont_x, disc_x = _separate_x(x_valid)  #_separate_x(x)
+    #     _, disc_x_invalid = _separate_x(x_invalid)
+    #     num_parameters = context.shape[0]
+    #     num_parameters_valid = x_valid.shape[0]
+    #     num_parameters_invalid = x_invalid.shape[0]
+
+    #     disc_log_prob = self.discrete_net.log_prob(x=disc_x, theta=context_valid).reshape(
+    #         num_parameters_valid
+    #     )
+
+    #     disc_log_prob_invalid = self.discrete_net.log_prob(x=disc_x_invalid, theta=context_invalid).reshape(
+    #         num_parameters_invalid
+    #     )
+
+    #     cont_log_prob = self.continuous_net.log_prob(
+    #         # Transform to log-space if needed.
+    #         torch.log(cont_x) if self.log_transform_x else cont_x,
+    #         # Pass parameters and discrete x as context.
+    #         context=torch.cat((context_valid, disc_x), dim=1),
+    #     )
+
+    #     cont_log_prob_invalid = torch.zeros(num_parameters_invalid)
+
+    #     # Combine into joint lp.
+    #     log_probs_combined = (torch.cat((disc_log_prob, disc_log_prob_invalid)) + torch.cat((cont_log_prob, cont_log_prob_invalid))).reshape(num_parameters)
+
+    #     # Maybe add log abs det jacobian of RTs: log(1/x) = - log(x)
+    #     if self.log_transform_x:
+    #         #log_probs_combined -= torch.log(cont_x).squeeze()
+    #         log_probs_combined[:num_parameters_valid] -= torch.log(cont_x).squeeze()
+
+    #     return log_probs_combined
+
 
     def log_prob_iid(self, x: Tensor, theta: Tensor) -> Tensor:
         """Return log prob given a batch of iid x and a different batch of theta.
