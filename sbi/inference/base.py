@@ -629,11 +629,21 @@ class NeuralInference(ABC):
         assert self._neural_net is not None
         neural_net = self._neural_net
 
+        # # (Re)-start the epoch count with the first epoch or any improvement.
+        # if epoch == 0 or self._train_log_prob > self._best_training_log_prob:
+        #     self._best_training_log_prob = self._train_log_prob
+        #     self._epochs_since_last_improvement = 0
+        #     self._best_model_state_dict = deepcopy(neural_net.state_dict())
+        # else:
+        #     self._epochs_since_last_improvement += 1
+
         # (Re)-start the epoch count with the first epoch or any improvement.
-        if epoch == 0 or self._train_log_prob > self._best_training_log_prob:
-            self._best_training_log_prob = self._train_log_prob
+        if epoch == 0 or self._val_log_prob > self._best_val_log_prob:
+            self._best_val_log_prob = self._val_log_prob
             self._epochs_since_last_improvement = 0
             self._best_model_state_dict = deepcopy(neural_net.state_dict())
+            if epoch == 0 or self._train_log_prob > self._best_training_log_prob:
+                self._best_training_log_prob = self._train_log_prob
         else:
             self._epochs_since_last_improvement += 1
 
@@ -1227,6 +1237,7 @@ def simulate_for_sbi(
     simulation_batch_size: int = 1,
     seed: Optional[int] = None,
     show_progress_bar: bool = True,
+    theta: Any = None,
 ) -> Tuple[Tensor, Tensor]:
     r"""Returns ($\theta, x$) pairs obtained from sampling the proposal and simulating.
 
@@ -1256,7 +1267,10 @@ def simulate_for_sbi(
     Returns: Sampled parameters $\theta$ and simulation-outputs $x$.
     """
 
-    theta = proposal.sample((num_simulations,))
+    if theta is None:
+        theta = proposal.sample((num_simulations,))
+    else:
+        pass
 
     x = simulate_in_batches(
         simulator=simulator,

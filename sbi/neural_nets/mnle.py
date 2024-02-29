@@ -410,7 +410,7 @@ class MixedDensityEstimator(nn.Module):
 
         This is different from `.log_prob()` to enable speed ups in evaluation during
         inference. The speed up is achieved by exploiting the fact that there are only
-        finite number of possible categories in the discrete part of the dat: one can
+        finite number of possible categories in the discrete part of the data: one can
         just calculate the log probs for each possible category (given the current batch
         of theta) and then copy those log probs into the entire batch of iid categories.
         For example, for the drift-diffusion model, there are only two choices, but
@@ -448,6 +448,85 @@ class MixedDensityEstimator(nn.Module):
         )
         # repeat parameters for categories
         repeated_theta = theta.repeat(self.discrete_net.num_categories - 1, 1)
+        log_prob_per_cat = torch.zeros(self.discrete_net.num_categories, batch_size).to(
+            net_device
+        )
+        log_prob_per_cat[:-1, :] = self.discrete_net.log_prob(
+            repeated_categories.to(net_device),
+            repeated_theta.to(net_device),
+        ).reshape(-1, batch_size)
+        # infer the last category logprob from sum to one.
+        log_prob_per_cat[-1, :] = torch.log(1 - log_prob_per_cat[:-1, :].exp().sum(0))
+
+        # fill in lps for each occurred category
+        log_probs_discrete = log_prob_per_cat[
+            x_disc.type_as(torch.zeros(1, dtype=torch.long)).squeeze()
+        ].reshape(-1)
+
+        # Get repeat discrete data and theta to match in batch shape for flow eval.
+        log_probs_cont = self.continuous_net.log_prob(
+            torch.log(x_cont_repeated) if self.log_transform_x else x_cont_repeated,
+            context=torch.cat((theta_repeated, x_disc_repeated), dim=1),
+        )
+
+        # Combine into joint lp with first dim over trials.
+        log_probs_combined = (log_probs_discrete + log_probs_cont).reshape(
+            num_trials, batch_size
+        )
+
+        # Maybe add log abs det jacobian of RTs: log(1/rt) = - log(rt)
+        if self.log_transform_x:
+            log_probs_combined -= torch.log(x_cont)
+
+        # Return batch over trials as required by SBI potentials.
+        return log_probs_combined
+    
+
+    def log_prob_iid_2(self, x: Tensor, theta: Tensor, aux_theta: Optional[Tensor]) -> Tensor:
+        """Return log prob given a batch of iid x and a different batch of theta.
+
+        This is different from `.log_prob()` to enable speed ups in evaluation during
+        inference. The speed up is achieved by exploiting the fact that there are only
+        finite number of possible categories in the discrete part of the data: one can
+        just calculate the log probs for each possible category (given the current batch
+        of theta) and then copy those log probs into the entire batch of iid categories.
+        For example, for the drift-diffusion model, there are only two choices, but
+        often 100s or 1000 trials. With this method a evaluation over trials then passes
+        a batch of `2 (one per choice) * num_thetas` into the NN, whereas the normal
+        `.log_prob()` would pass `1000 * num_thetas`.
+
+        Args:
+            x: batch of iid data, data observed given the same underlying parameters or
+                experimental conditions.
+            theta: batch of parameters to be evaluated, i.e., each batch entry will be
+                evaluated for the entire batch of iid x.
+
+        Returns:
+            Tensor: log probs with shape (num_trials, num_parameters), i.e., the log
+                prob for each theta for each trial.
+        """
+
+        theta = atleast_2d(theta)
+        x = atleast_2d(x)
+        batch_size = theta.shape[0]
+        num_trials = x.shape[0]
+        theta_repeated, x_repeated = match_theta_and_x_batch_shapes(theta, x)
+        print("theta rep shape", theta_repeated.shape)
+        net_device = next(self.discrete_net.parameters()).device
+        assert (
+            net_device == x.device and x.device == theta.device
+        ), f"device mismatch: net, x, theta: {net_device}, {x.device}, {theta.device}."
+
+        x_cont_repeated, x_disc_repeated = _separate_x(x_repeated)
+        x_cont, x_disc = _separate_x(x)
+
+        # repeat categories for parameters
+        repeated_categories = torch.repeat_interleave(
+            torch.arange(self.discrete_net.num_categories - 1), batch_size, dim=0
+        )
+        # repeat parameters for categories
+        repeated_theta = theta.repeat(self.discrete_net.num_categories - 1, 1)
+        print("rep theta shape", repeated_theta.shape)
         log_prob_per_cat = torch.zeros(self.discrete_net.num_categories, batch_size).to(
             net_device
         )

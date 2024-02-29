@@ -463,6 +463,8 @@ class LikelihoodEstimator(NeuralInference, ABC):
             self._summary["epoch_durations_sec"].append(t2-t1)
             self._summary["epochs"].append(self.epoch)
 
+            theta, x, _ = self.get_simulations(starting_round=start_idx)
+
             # Compute the training lps average of current batch.
             train_log_prob_average = train_log_probs_sum / (
                 len(train_loader) * train_loader.batch_size  # type: ignore
@@ -789,6 +791,7 @@ class LikelihoodEstimator(NeuralInference, ABC):
         monitoring_interval: int = 10,
         visualise_mnle = None,
         score_mnle = None,
+        rectify_loss = False,
     ) -> flows.Flow:
         r"""Train the density estimator to learn the distribution $p(x|\theta)$.
 
@@ -877,8 +880,8 @@ class LikelihoodEstimator(NeuralInference, ABC):
 
             # Simulate parameter-data pairs and append them.
             theta, x = simulate_for_sbi(
-                simulator=self._simulator, 
-                proposal=self._prior, 
+                simulator=self._simulator,
+                proposal=self._prior,
                 num_simulations=num_simulations, simulation_batch_size=simulation_batch_size,
                 num_workers=num_workers,
                 )
@@ -905,7 +908,31 @@ class LikelihoodEstimator(NeuralInference, ABC):
             train_loss = torch.mean(train_losses)
             train_log_probs_sum -= train_losses.sum().item()
 
-            train_loss.backward()
+            if rectify_loss:
+                # if log_transform_x == False:    # ensure probs for rt > 0 for aborts is 0 and for rt < 0 for non-aborts is also 0
+                relabelled_x_batch = torch.clone(x_batch)
+                # cont_x, disc_x = _separate_x(x)
+                # abort_inds = disc_x == 0
+                # nonabort_inds = disc_x > 0
+                # pos_rt_inds = cont_x > 0
+                # neg_rt_inds = cont_x < 0
+                relabelled_x_batch[:,0] *= -1
+                relabelled_train_losses = self._loss(theta=theta_batch, x=relabelled_x_batch)
+                rectified_train_losses = torch.clone(relabelled_train_losses)
+                nonzero_prob_inds = torch.abs(relabelled_train_losses) > 10**(-7)
+                # rectified_train_losses[nonzero_prob_inds] = train_losses[nonzero_prob_inds]
+                rectified_train_losses[nonzero_prob_inds] = (0.001)*train_losses[nonzero_prob_inds]
+                # rectified_train_losses[torch.logical_not(nonzero_prob_inds)] = (100.0)*train_losses[torch.logical_not(nonzero_prob_inds)] #+ relabelled_train_losses[nonzero_prob_inds]
+                # rectified_train_losses[torch.logical_not(nonzero_prob_inds)] = train_losses[torch.logical_not(nonzero_prob_inds)] - relabelled_train_losses[torch.logical_not(nonzero_prob_inds)]
+
+                # rectified_train_losses[nonzero_prob_inds] = train_losses[nonzero_prob_inds] + 10**1
+                rectified_train_loss = torch.mean(rectified_train_losses)
+                # relabelled_x_batch[abort_inds]
+                # rectified_inds = abort_inds * nonzero_prob_inds
+                # rectified_inds = nonabort_inds * nonzero_prob_inds
+                rectified_train_loss.backward()
+            else: 
+                train_loss.backward()
             if clip_max_norm is not None:
                 clip_grad_norm_(
                     self._neural_net.parameters(),

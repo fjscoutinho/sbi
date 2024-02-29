@@ -317,6 +317,43 @@ class ConditionedPotential:
         theta_condition[:, self.dims_to_sample] = theta_
 
         return self.potential_fn(theta_condition, track_gradients=track_gradients)
+    
+    def call(self, theta: Tensor, track_gradients: bool = True) -> Tensor:
+        r"""
+        Returns the conditional potential $\log(p(\theta_i|\theta_j, x))$.
+
+        Args:
+            theta: Free parameters $\theta_i$, batch dimension 1.
+
+        Returns:
+            Conditional posterior log-probability $\log(p(\theta_i|\theta_j, x))$,
+            masked outside of prior.
+        """
+        theta_ = ensure_theta_batched(torch.as_tensor(theta, dtype=torch.float32))
+
+        # `theta_condition`` will first have all entries of the `condition` and then
+        # override the entries that should be sampled with `theta` (see below).
+        theta_condition_ = deepcopy(self.condition)
+
+        # Save numbr of model parameters and experimental conditions in order to build theta 
+        model_params_batchsize, num_model_params = theta_.shape
+        aux_params_batchsize, num_aux_params = theta_condition_.shape
+
+        if model_params_batchsize > 1:
+            theta_
+
+        # Repeat model parameters to the same batch size as auxiliary parameters
+        theta_ = theta_.repeat(theta_condition_.shape[0], 1)
+
+        # Build a theta made up of the model and auxiliary parameters, with shape num_trials x num_total_params where the auxiliary parameters might change between trials
+        theta = torch.cat((theta_, theta_condition_), dim=1)
+
+        # In case `theta` is a batch of theta (e.g. multi-chain MCMC), we have to
+        # repeat `theta_condition`` to the same batchsize.
+        theta_condition = theta_condition.repeat(theta_.shape[0], 1)
+        theta_condition[:, self.dims_to_sample] = theta_
+
+        return self.potential_fn(theta_condition, track_gradients=track_gradients)
 
     def set_x(self, x_o: Optional[Tensor]):
         """Check the shape of the observed data and, if valid, set it."""

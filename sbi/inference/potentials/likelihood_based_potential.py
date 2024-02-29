@@ -204,7 +204,109 @@ class MixedLikelihoodBasedPotential(LikelihoodBasedPotential):
 
         return log_likelihood_trial_sum + self.prior.log_prob(theta)
 
+class MixedLikelihoodBasedPotential(LikelihoodBasedPotential):
+    def __init__(
+        self,
+        likelihood_estimator: MixedDensityEstimator,
+        prior: Distribution,
+        x_o: Optional[Tensor],
+        device: str = "cpu",
+        # print_: Optional[bool] = False,
+    ):
+        super().__init__(likelihood_estimator, prior, x_o, device)
+
+    def __call__(self, theta: Tensor, track_gradients: bool = True) -> Tensor:
+        #print("theta and x_o shapes", theta.shape, self.x_o.shape)
+        # Calculate likelihood in one batch.
+        with torch.set_grad_enabled(track_gradients):
+            # Call the specific log prob method of the mixed likelihood estimator as
+            # this optimizes the evaluation of the discrete data part.
+            # TODO: how to fix pyright issues?
+            log_likelihood_trial_batch = self.likelihood_estimator.log_prob_iid(
+                x=self.x_o,
+                theta=theta.to(self.device),
+            )  # type: ignore
+            # Reshape to (x-trials x parameters), sum over trial-log likelihoods.
+            log_likelihood_trial_sum = log_likelihood_trial_batch.reshape(
+                self.x_o.shape[0], -1
+            ).sum(0)
+
+        if print_:
+            print("prior theta shape", theta.shape)
+            print("prior theta", theta)
+            print("prior lp", self.prior.log_prob(theta))
+
+            print("ll theta shape", theta.shape)
+            print("ll theta", theta)
+            print("ll sum", log_likelihood_trial_sum)
+    
+        return log_likelihood_trial_sum + self.prior.log_prob(theta)
+
 class ConditionedMixedLikelihoodBasedPotential(LikelihoodBasedPotential):
+    def __init__(
+        self,
+        likelihood_estimator: MixedDensityEstimator,
+        prior: Distribution,
+        x_o: Optional[Tensor],
+        experimental_conditions: Optional[Tensor],
+        device: str = "cpu",
+        #print_: Optional[bool] = False,
+    ):
+        self.experimental_conditions = experimental_conditions
+        super().__init__(likelihood_estimator, prior, x_o, device)
+
+    def __call__(self, theta: Tensor, track_gradients: bool = True) -> Tensor:
+        num_chains = theta.shape[0]
+        num_trials = self.x_o.shape[0]
+
+        num_exp_conds = self.experimental_conditions.shape[1]
+        # abls = self.experimental_conditions["abl"]
+        # ilds = self.experimental_conditions["ild"]
+
+        aux_theta = self.experimental_conditions  # tensor with dim num_trials x num_exp_conds 
+        aux_theta = aux_theta.repeat(num_chains,1)  # dim num_trials.num_chains x exp_conds
+
+        #print("aux theta shape", aux_theta.shape)
+
+        conditional_theta = torch.repeat_interleave(theta, num_trials, dim=0)
+        #aux_theta = torch.vstack((abls,ilds)).T.repeat(num_chains,1)
+
+        conditional_theta[:,-num_exp_conds:] = aux_theta
+
+        # Calculate likelihood in one batch.
+        with torch.set_grad_enabled(track_gradients):
+            # Call the specific log prob method of the mixed likelihood estimator as
+            # this optimizes the evaluation of the discrete data part.
+            # TODO: how to fix pyright issues?
+            # log_likelihood_trial_batch = self.likelihood_estimator.log_prob_iid(
+            #     x=self.x_o,
+            #     theta=theta.to(self.device),
+            # )  # type: ignore
+
+            log_likelihood_trial_batch = self.likelihood_estimator.log_prob(
+                x=self.x_o.repeat(num_chains,1),
+                context=conditional_theta.to(self.device),
+            )  # type: ignore
+
+            # Reshape to (x-trials x parameters), sum over trial-log likelihoods.
+            log_likelihood_trial_sum = log_likelihood_trial_batch.reshape(
+                num_trials, -1
+            ).sum(0)
+
+        if print_:
+            print("prior theta shape", theta.shape)
+            print("prior theta", theta)
+            print("prior lp", self.prior.log_prob(theta))
+
+            print("ll cond theta shape", conditional_theta.shape)
+            print("ll cond theta", conditional_theta)
+            print("ll sum", log_likelihood_trial_sum)
+
+        return log_likelihood_trial_sum + self.prior.log_prob(theta)
+    
+print_ = False
+
+class ConditionedMixedLikelihoodBasedPotential4(LikelihoodBasedPotential):
     def __init__(
         self,
         likelihood_estimator: MixedDensityEstimator,
@@ -254,4 +356,78 @@ class ConditionedMixedLikelihoodBasedPotential(LikelihoodBasedPotential):
                 num_trials, -1
             ).sum(0)
 
-        return log_likelihood_trial_sum + self.prior.log_prob(theta)
+        if print_:
+            print("prior cond theta shape", conditional_theta.shape)
+            print("prior cond theta", conditional_theta)
+            print("prior lp", self.prior.log_prob(conditional_theta).sum())
+
+            print("ll cond theta shape", conditional_theta.shape)
+            print("ll cond theta", conditional_theta)
+            print("ll sum", log_likelihood_trial_sum)
+
+        return log_likelihood_trial_sum + self.prior.log_prob(conditional_theta).sum()
+
+
+class ConditionedMixedLikelihoodBasedPotential3(LikelihoodBasedPotential):
+    def __init__(
+        self,
+        likelihood_estimator: MixedDensityEstimator,
+        prior: Distribution,
+        x_o: Optional[Tensor],
+        experimental_conditions: Optional[Tensor],
+        device: str = "cpu",
+        #print_: Optional[bool] = False,
+    ):
+        self.experimental_conditions = experimental_conditions
+        super().__init__(likelihood_estimator, prior, x_o, device)
+
+    def __call__(self, theta: Tensor, track_gradients: bool = True) -> Tensor:
+        num_chains = theta.shape[0]
+        num_trials = self.x_o.shape[0]
+
+        num_exp_conds = self.experimental_conditions.shape[1]
+        num_params = theta.shape[1]
+        num_model_params = num_params - num_exp_conds
+        # abls = self.experimental_conditions["abl"]
+        # ilds = self.experimental_conditions["ild"]
+
+        aux_theta = self.experimental_conditions  # tensor with dim num_trials x num_exp_conds 
+        aux_theta = aux_theta.repeat(num_chains,1)  # dim num_trials.num_chains x exp_conds
+
+        #print("aux theta shape", aux_theta.shape)
+
+        conditional_theta = torch.repeat_interleave(theta, num_trials, dim=0)
+        #aux_theta = torch.vstack((abls,ilds)).T.repeat(num_chains,1)
+
+        conditional_theta[:,-num_exp_conds:] = aux_theta
+
+        # Calculate likelihood in one batch.
+        with torch.set_grad_enabled(track_gradients):
+            # Call the specific log prob method of the mixed likelihood estimator as
+            # this optimizes the evaluation of the discrete data part.
+            # TODO: how to fix pyright issues?
+            # log_likelihood_trial_batch = self.likelihood_estimator.log_prob_iid(
+            #     x=self.x_o,
+            #     theta=theta.to(self.device),
+            # )  # type: ignore
+
+            log_likelihood_trial_batch = self.likelihood_estimator.log_prob(
+                x=self.x_o.repeat(num_chains,1),
+                context=conditional_theta.to(self.device),
+            )  # type: ignore
+
+            # Reshape to (x-trials x parameters), sum over trial-log likelihoods.
+            log_likelihood_trial_sum = log_likelihood_trial_batch.reshape(
+                num_trials, -1
+            ).sum(0)
+
+        if print_:
+            print("prior trimmed theta shape", theta[:,:num_model_params].shape)
+            print("prior trimmed theta", theta[:,:num_model_params])
+            print("prior lp",  self.prior.log_prob(theta[:,:num_model_params]))
+
+            print("ll cond theta shape", conditional_theta.shape)
+            print("ll cond theta", conditional_theta)
+            print("ll sum", log_likelihood_trial_sum)
+
+        return log_likelihood_trial_sum + self.prior.log_prob(theta[:,:num_model_params])
