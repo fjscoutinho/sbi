@@ -431,3 +431,61 @@ class ConditionedMixedLikelihoodBasedPotential3(LikelihoodBasedPotential):
             print("ll sum", log_likelihood_trial_sum)
 
         return log_likelihood_trial_sum + self.prior.log_prob(theta[:,:num_model_params])
+    
+
+class ConditionedMixedLikelihood(LikelihoodBasedPotential):
+    def __init__(
+        self,
+        likelihood_estimator: MixedDensityEstimator,
+        prior: Distribution,
+        x_o: Optional[Tensor],
+        experimental_conditions: Optional[Tensor],
+        device: str = "cpu",
+        #print_: Optional[bool] = False,
+    ):
+        self.experimental_conditions = experimental_conditions
+        super().__init__(likelihood_estimator, prior, x_o, device)
+
+    def __call__(self, theta: Tensor, track_gradients: bool = True) -> Tensor:
+        theta = theta.reshape(1,-1)
+
+        num_trials = self.x_o.shape[0]
+
+        num_exp_conds = self.experimental_conditions.shape[1]
+        num_model_params = theta.shape[1]
+        num_params = num_model_params + num_exp_conds
+
+        aux_theta = self.experimental_conditions  # tensor with dim num_trials x num_exp_conds 
+
+        _theta = torch.repeat_interleave(theta, num_trials, dim=0)
+        conditional_theta = torch.cat((_theta, aux_theta), dim=1)
+
+        #print("cond th shape", conditional_theta.shape)
+
+        # Calculate likelihood in one batch.
+        with torch.set_grad_enabled(track_gradients):
+            # Call the specific log prob method of the mixed likelihood estimator as
+            # this optimizes the evaluation of the discrete data part.
+            # TODO: how to fix pyright issues?
+            # )  # type: ignore
+
+            log_likelihood_trial_batch = self.likelihood_estimator.log_prob(
+                x=self.x_o,
+                context=conditional_theta.to(self.device),
+            )  # type: ignore
+
+            # Reshape to (x-trials x parameters), sum over trial-log likelihoods.
+            log_likelihood_trial_sum = log_likelihood_trial_batch.reshape(
+                num_trials, -1
+            ).sum(0)
+
+        if print_:
+            print("prior trimmed theta shape", theta[:,:num_model_params].shape)
+            print("prior trimmed theta", theta[:,:num_model_params])
+            print("prior lp",  self.prior.log_prob(theta[:,:num_model_params]))
+
+            print("ll cond theta shape", conditional_theta.shape)
+            print("ll cond theta", conditional_theta)
+            print("ll sum", log_likelihood_trial_sum)
+
+        return log_likelihood_trial_sum
