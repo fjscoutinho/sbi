@@ -19,6 +19,7 @@ from sbi.utils import check_prior, del_entries
 class MNLE(LikelihoodEstimator):
     def __init__(
         self,
+        proposal: Optional[Distribution] = None,
         prior: Optional[Distribution] = None,
         density_estimator: Union[str, Callable] = "mnle",
         device: str = "cpu",

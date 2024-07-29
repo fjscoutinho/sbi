@@ -90,6 +90,7 @@ class NeuralInference(ABC):
 
     def __init__(
         self,
+        proposal: Optional[Distribution] = None,
         prior: Optional[Distribution] = None,
         device: str = "cpu",
         logging_level: Union[int, str] = "WARNING",
@@ -117,6 +118,7 @@ class NeuralInference(ABC):
         self._device = process_device(device)
         check_prior(prior)
         check_if_prior_on_device(self._device, prior)
+        self._proposal = proposal
         self._prior = prior
         self._simulator = simulator
         self._likelihood = likelihood
@@ -1280,6 +1282,97 @@ def simulate_for_sbi(
         seed=seed,
         show_progress_bars=show_progress_bar,
     )
+
+    return theta, x
+
+
+def simulate_for_sbi_truncated(
+    simulator: Callable,
+    proposal: Any,
+    num_simulations: int,
+    num_workers: int = 1,
+    tmax: float = 1.0,
+    #simulation_batch_size: int = 1,
+    seed: Optional[int] = None,
+    show_progress_bar: bool = True,
+    theta: Any = None,
+) -> Tuple[Tensor, Tensor]:
+    r"""Returns ($\theta, x$) pairs obtained from sampling the proposal and simulating.
+
+    This function performs two steps:
+
+    - Sample parameters $\theta$ from the `proposal`.
+    - Simulate these parameters to obtain $x$.
+
+    Args:
+        simulator: A function that takes parameters $\theta$ and maps them to
+            simulations, or observations, `x`, $\text{sim}(\theta)\to x$. Any
+            regular Python callable (i.e. function or class with `__call__` method)
+            can be used.
+        proposal: Probability distribution that the parameters $\theta$ are sampled
+            from.
+        num_simulations: Number of simulations that are run.
+        num_workers: Number of parallel workers to use for simulations.
+        simulation_batch_size: Number of parameter sets that the simulator
+            maps to data x at once. If None, we simulate all parameter sets at the
+            same time. If >= 1, the simulator has to process data of shape
+            (simulation_batch_size, parameter_dimension).
+        seed: Seed for reproducibility.
+        show_progress_bar: Whether to show a progress bar for simulating. This will not
+            affect whether there will be a progressbar while drawing samples from the
+            proposal.
+
+    Returns: Sampled parameters $\theta$ and simulation-outputs $x$.
+    """
+
+    x = None
+
+    invalid_x_count = num_simulations
+
+    counter = 0
+
+    num_params = proposal.sample((1,)).shape[1]
+    num_data_types = 2
+
+    while invalid_x_count > 0:
+
+        if theta is None:
+            theta_ = proposal.sample((invalid_x_count,))
+        else:
+            num_selections = invalid_x_count
+            theta_ = theta[torch.randperm(theta.size(0))[:num_selections]]
+
+        # print(theta_.shape)
+        # print(int(round(invalid_x_count/100)))
+
+        x_ = simulate_in_batches(
+            simulator=simulator,
+            theta=theta_,
+            sim_batch_size=int(invalid_x_count/100)+1,
+            num_workers=num_workers,
+            seed=seed,
+            show_progress_bars=show_progress_bar,
+        )
+
+        rts = x_[:,0].squeeze()
+        invalid_idx = rts > tmax
+        valid_idx = torch.logical_not(invalid_idx)
+        invalid_x_count = (invalid_idx).sum().item()
+
+        # print(invalid_x_count)
+        # print(counter)
+
+        theta__ = theta_[valid_idx,:].reshape(-1,num_params)
+        x__ = x_[valid_idx,:].reshape(-1,num_data_types)
+
+        try:
+            theta = torch.vstack((theta, theta__))
+            x = torch.vstack((x, x__))
+        except:
+            theta = theta__
+            x = x__
+
+        counter += 1
 
     return theta, x
 

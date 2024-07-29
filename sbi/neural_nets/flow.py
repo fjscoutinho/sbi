@@ -6,10 +6,16 @@ from functools import partial
 from typing import Optional
 from warnings import warn
 
+####
+from src.nsf import transforms
+from src.nsf.transforms.splines import rational_quadratic
+###
+
 from pyknos.nflows import distributions as distributions_
-from pyknos.nflows import flows, transforms
+#from pyknos.nflows import flows, transforms
+from pyknos.nflows import flows
 from pyknos.nflows.nn import nets
-from pyknos.nflows.transforms.splines import rational_quadratic
+#from pyknos.nflows.transforms.splines import rational_quadratic
 from torch import Tensor, nn, relu, tanh, tensor, uint8
 
 from sbi.utils.sbiutils import (
@@ -19,6 +25,23 @@ from sbi.utils.sbiutils import (
 )
 from sbi.utils.torchutils import create_alternating_binary_mask
 from sbi.utils.user_input_checks import check_data_device, check_embedding_net_device
+
+
+# import sys
+# nsf_folder = r'/home/filipe/Documents/GitHub/lfi/src/nsf'
+# sys.path.append(nsf_folder)
+
+# src_folder = r'/home/filipe/Documents/GitHub/lfi/src'
+# sys.path.append(src_folder)
+
+# print(nsf_folder)
+# print(sys.path)
+
+# from src.nsf.transforms import *
+# from nsf.transforms.splines import rational_quadratic
+
+# from nsf import flows, transforms
+
 
 
 def build_made(

@@ -31,7 +31,7 @@ from sbi.utils import (
 
 import time
 import numpy as np
-from sbi.inference.base import simulate_for_sbi
+from sbi.inference.base import simulate_for_sbi, simulate_for_sbi_truncated
 from IPython.display import clear_output
 from multiprocessing import cpu_count
 
@@ -39,6 +39,7 @@ from multiprocessing import cpu_count
 class LikelihoodEstimator(NeuralInference, ABC):
     def __init__(
         self,
+        proposal: Optional[Distribution] = None,
         prior: Optional[Distribution] = None,
         density_estimator: Union[str, Callable] = "maf",
         device: str = "cpu",
@@ -75,6 +76,7 @@ class LikelihoodEstimator(NeuralInference, ABC):
         """
 
         super().__init__(
+            proposal=proposal,
             prior=prior,
             device=device,
             logging_level=logging_level,
@@ -631,6 +633,8 @@ class LikelihoodEstimator(NeuralInference, ABC):
             )
             self.epoch, self._total_num_simulations, self._total_num_effective_sims, self._running_num_simulations, self._train_log_prob_dn, self._train_log_prob_cn, self._train_log_prob, self._val_log_prob = 0, 0, 0, 0, float("-Inf"), float("-Inf"), float("-Inf"), float("-Inf")
 
+        num_workers = cpu_count()-1
+
         t0 = time.time()
         # while self.epoch < max_num_epochs and not self._converged_online(
         #     self.epoch, min_training_std, min_training_ma_std,
@@ -640,7 +644,12 @@ class LikelihoodEstimator(NeuralInference, ABC):
             t1 = time.time()
 
             # Simulate parameter-data pairs and append them.
-            theta, x = simulate_for_sbi(simulator=self._simulator, proposal=self._prior, num_simulations=num_simulations)
+            theta, x = simulate_for_sbi(
+                simulator=self._simulator,
+                proposal=self._proposal,
+                num_simulations=num_simulations,
+                simulation_batch_size = int(np.ceil(num_simulations/100)),
+                num_workers=num_workers,)
             self.append_simulations(theta, x)
 
             # Prepare data loader for training.
@@ -855,7 +864,7 @@ class LikelihoodEstimator(NeuralInference, ABC):
                 lr=learning_rate,
                 amsgrad=use_amsgrad,
             )
-            self.epoch, self._total_num_simulations, self._total_num_effective_sims, self._running_num_simulations, self._training_batch_size, self._train_log_prob_dn, self._train_log_prob_cn, self._train_log_prob = 0, 0, 0, 0, starting_training_batch_size, float("-Inf"), float("-Inf"), float("-Inf")
+            self.epoch, self._total_num_simulations, self._total_num_effective_sims, self._running_num_simulations, self._training_batch_size, self._train_log_prob_dn, self._train_log_prob_cn, self._train_log_prob, self._val_log_prob = 0, 0, 0, 0, starting_training_batch_size, float("-Inf"), float("-Inf"), float("-Inf"), float("-Inf")
 
         num_workers = cpu_count()-1
 
@@ -881,7 +890,7 @@ class LikelihoodEstimator(NeuralInference, ABC):
             # Simulate parameter-data pairs and append them.
             theta, x = simulate_for_sbi(
                 simulator=self._simulator,
-                proposal=self._prior,
+                proposal=self._proposal,
                 num_simulations=num_simulations, simulation_batch_size=simulation_batch_size,
                 num_workers=num_workers,
                 )
@@ -1009,6 +1018,523 @@ class LikelihoodEstimator(NeuralInference, ABC):
                 self._maybe_compute_example_RTs(visualise_mnle=visualise_mnle, neural_net=self._neural_net, summary=self._summary, metrics_dictionary=metrics_dictionary) # Example RT distributions
                 self._maybe_plot_training_dynamic(show_plot=show_train_plot, summary=self._summary, monitoring_interval=monitoring_interval)# Plot training, validation and Huber losses
                 self._maybe_show_progress(self._show_progress_bars, self.epoch)
+
+            t3 = time.time()
+            self._summary["total_epoch_durations_sec"].append(t3-t1)
+
+        self._report_dynamic_convergence_at_end(self.epoch, max_num_epochs, min_training_std, min_training_ma_std)
+
+        # Update summary.
+        self._summary["epochs_trained"].append(self.epoch)
+        self._summary["best_training_log_prob"].append(self._best_training_log_prob)
+        self._summary["total_num_simulations"].append(self._total_num_simulations)
+        self._summary["total_num_effective_simulations"].append(self._total_num_effective_sims)
+        self._summary["neural_nets"].append(deepcopy(self._neural_net))
+        self._summary["best_neural_nets"].append(deepcopy(self._neural_net).load_state_dict(self._best_model_state_dict))
+
+        # Update TensorBoard and summary dict.
+        self._summarize_dynamic(round_=self._round)
+
+        # Update description for progress bar.
+        if show_train_summary:
+            print(self._describe_dynamic_round(self._round, self._summary))
+
+        # Avoid keeping the gradients in the resulting network, which can
+        # cause memory leakage when benchmarking.
+        self._neural_net.zero_grad(set_to_none=True)
+
+        t4 = time.time()
+        self._summary["training_duration_sec"].append(t4-t0)
+
+        return deepcopy(self._neural_net)
+
+
+    def train_online_truncated(
+        self,
+        training_batch_size: int = 50,
+        learning_rate: float = 5e-4,
+        validation_fraction: float = 0.5,
+        stop_after_epochs: int = 20,
+        max_num_epochs: int = 2**31 - 1,
+        max_num_simulations: int = 10**6,
+        min_training_std: float = 1e-10,
+        min_training_ma_std: float = 1e-10,
+        clip_max_norm: Optional[float] = 5.0,
+        resume_training: bool = False,
+        discard_prior_samples: bool = False,
+        retrain_from_scratch: bool = False,
+        show_train_summary: bool = False,
+        dataloader_kwargs: Optional[Dict] = None,
+        use_amsgrad: bool = False,
+        num_simulations: int = 0,
+        show_train_plot: bool = False,
+        metrics_dictionary: Optional[Dict] = None,
+        visualise_mnle = None,
+        score_mnle = None,
+    ) -> flows.Flow:
+        r"""Train the density estimator to learn the distribution $p(x|\theta)$.
+
+        Args:
+            resume_training: Can be used in case training time is limited, e.g. on a
+                cluster. If `True`, the split between train and validation set, the
+                optimizer, the number of epochs, and the best validation log-prob will
+                be restored from the last time `.train()` was called.
+            discard_prior_samples: Whether to discard samples simulated in round 1, i.e.
+                from the prior. Training may be sped up by ignoring such less targeted
+                samples.
+            retrain_from_scratch: Whether to retrain the conditional density
+                estimator for the posterior from scratch each round.
+            show_train_summary: Whether to print the number of epochs and validation
+                loss after the training.
+            dataloader_kwargs: Additional or updated kwargs to be passed to the training
+                and validation dataloaders (like, e.g., a collate_fn)
+
+        Returns:
+            Density estimator that has learned the distribution $p(x|\theta)$.
+        """
+        # Load data from most recent round.
+        self._round = max(self._data_round_index)
+        # Starting index for the training set (1 = discard round-0 samples).
+        start_idx = int(discard_prior_samples and self._round > 0)
+
+        train_loader, val_loader = self.get_dataloaders(
+            start_idx,
+            training_batch_size,
+            validation_fraction,
+            resume_training,
+            dataloader_kwargs=dataloader_kwargs,
+        )
+
+        # First round or if retraining from scratch:
+        # Call the `self._build_neural_net` with the rounds' thetas and xs as
+        # arguments, which will build the neural network
+        # This is passed into NeuralPosterior, to create a neural posterior which
+        # can `sample()` and `log_prob()`. The network is accessible via `.net`.
+        if self._neural_net is None or retrain_from_scratch:
+            # Get theta,x to initialize NN
+            theta, x, _ = self.get_simulations(starting_round=start_idx)
+            # Use only training data for building the neural net (z-scoring transforms)
+            self._neural_net = self._build_neural_net(
+                theta[self.train_indices].to("cpu"),
+                x[self.train_indices].to("cpu"),
+            )
+            self._x_shape = x_shape_from_simulation(x.to("cpu"))
+            del theta, x
+
+            self.un_append_simulations()
+
+            assert (
+                len(self._x_shape) < 3
+            ), "SNLE cannot handle multi-dimensional simulator output."
+
+        self._neural_net.to(self._device)
+        if not resume_training:
+            self.optimizer = optim.Adam(
+                list(self._neural_net.parameters()),
+                lr=learning_rate,
+                amsgrad=use_amsgrad,
+            )
+            self.epoch, self._total_num_simulations, self._total_num_effective_sims, self._running_num_simulations, self._train_log_prob_dn, self._train_log_prob_cn, self._train_log_prob, self._val_log_prob = 0, 0, 0, 0, float("-Inf"), float("-Inf"), float("-Inf"), float("-Inf")
+
+        num_workers = cpu_count()-1
+
+        t0 = time.time()
+        # while self.epoch < max_num_epochs and not self._converged_online(
+        #     self.epoch, min_training_std, min_training_ma_std,
+        # ):
+        while self._running_num_simulations < max_num_simulations and not self._converged_online(self.epoch, min_training_std, min_training_ma_std,):
+
+            t1 = time.time()
+
+            # Simulate parameter-data pairs and append them.
+            theta, x = simulate_for_sbi_truncated(
+                simulator=self._simulator,
+                proposal=self._proposal,
+                num_simulations=num_simulations,
+                num_workers=num_workers,
+                )
+
+            self.append_simulations(theta, x)
+
+            # Prepare data loader for training.
+            train_loader = self.get_dataloaders_online(
+                start_idx,
+                training_batch_size,
+                dataloader_kwargs=dataloader_kwargs,
+            )
+
+            # Train for a single epoch.
+            self._neural_net.train()
+            train_log_probs_sum = 0
+            for batch in train_loader:
+                self.optimizer.zero_grad()
+                theta_batch, x_batch = (
+                    batch[0].to(self._device),
+                    batch[1].to(self._device),
+                )
+                # Evaluate on x with theta as context.
+                train_losses = self._loss(theta=theta_batch, x=x_batch)
+                train_losses = torch.nan_to_num(train_losses)
+                train_loss = torch.mean(train_losses)
+                train_log_probs_sum -= train_losses.sum().item()
+
+                train_loss.backward()
+                if clip_max_norm is not None:
+                    clip_grad_norm_(
+                        self._neural_net.parameters(),
+                        max_norm=clip_max_norm,
+                    )
+                self.optimizer.step()
+
+                # Log training log prob for each minibatch.
+                self._summary["all_training_log_probs"].append(train_losses.tolist())
+                self._running_num_simulations += len(train_losses)
+                self._summary["running_num_simulations"].append(self._running_num_simulations)
+
+            self.epoch += 1
+
+            # Keep track of current epoch and epoch duration
+            t2 = time.time()
+            self._summary["epoch_durations_sec"].append(t2-t1)
+            self._summary["epochs"].append(self.epoch)
+
+            # Compute the training lps average of current batch.
+            train_log_prob_average = train_log_probs_sum / (
+                len(train_loader) * train_loader.batch_size  # type: ignore
+            )
+            self._summary["training_log_probs"].append(train_log_prob_average)
+
+            # Keep track of the number of simulations/grad calls used to train net.
+            self._total_num_simulations += x.shape[0]
+            self._total_num_effective_sims += (len(train_loader) * train_loader.batch_size)
+
+            # # Keep track of the number of used simulations from minibatch to minibatch
+            # log_probs_list = self._summary["all_training_log_probs"]
+            # mbs_list = [len(ele) for count, ele in enumerate(log_probs_list)]
+            # self._summary["running_num_simulations"] = [sum(mbs_list[:count+1]) for count, ele in enumerate(mbs_list)]
+
+            # Batch and minibatch information.
+            self._summary["minibatch_sizes"].append(train_loader.batch_size)
+            self._summary["batch_sizes"].append(len(train_loader) * train_loader.batch_size)
+
+            # Calculate validation performance.
+            self._neural_net.eval()
+            val_log_prob_sum = 0
+            with torch.no_grad():
+                for batch in val_loader:
+                    theta_batch, x_batch = (
+                        batch[0].to(self._device),
+                        batch[1].to(self._device),
+                    )
+                    # Evaluate on x with theta as context.
+                    val_losses = self._loss(theta=theta_batch, x=x_batch)
+                    val_losses = torch.nan_to_num(val_losses)
+                    val_log_prob_sum -= val_losses.sum().item()
+
+                    # Log validation log prob for each minibatch.
+                    self._summary["all_validation_log_probs"].append(val_losses.tolist())
+
+            # Take mean over all validation samples.
+            self._val_log_prob = val_log_prob_sum / (
+                len(val_loader) * val_loader.batch_size  # type: ignore
+            )
+            # Log validation log prob for every epoch.
+            self._summary["validation_log_probs"].append(self._val_log_prob)
+
+            self._maybe_save_metrics(score_mnle, self._neural_net, summary=self._summary, metrics_dictionary=metrics_dictionary) # Huber loss
+            self._maybe_save_analytical_lps(analytical_likelihood=self._likelihood, theta=theta, x=x, summary=self._summary) # Analytical likelihood
+            self._maybe_compute_example_RTs(visualise_mnle=visualise_mnle, neural_net=self._neural_net, summary=self._summary, metrics_dictionary=metrics_dictionary) # Example RT distributions
+            self._maybe_plot_training(show_plot=show_train_plot, summary=self._summary)# Plot training, validation and Huber losses
+            self._maybe_show_progress(self._show_progress_bars, self.epoch)
+
+            # Remove simulations currently stored before the next epoch.
+            self.un_append_simulations()
+
+            t3 = time.time()
+            self._summary["total_epoch_durations_sec"].append(t3-t1)
+
+        self._report_online_convergence_at_end(self.epoch, max_num_epochs, min_training_std, min_training_ma_std)
+
+        # Update summary.
+        self._summary["epochs_trained"].append(self.epoch)
+        self._summary["best_training_log_prob"].append(self._best_training_log_prob)
+        self._summary["total_num_simulations"].append(self._total_num_simulations)
+        self._summary["total_num_effective_simulations"].append(self._total_num_effective_sims)
+        self._summary["neural_nets"].append(deepcopy(self._neural_net))
+        self._summary["best_neural_nets"].append(deepcopy(self._neural_net).load_state_dict(self._best_model_state_dict))
+
+        # Update TensorBoard and summary dict.
+        self._summarize_online(round_=self._round)
+
+        # Update description for progress bar.
+        if show_train_summary:
+            print(self._describe_online_round(self._round, self._summary))
+
+        # Avoid keeping the gradients in the resulting network, which can
+        # cause memory leakage when benchmarking.
+        self._neural_net.zero_grad(set_to_none=True)
+
+        t4 = time.time()
+        self._summary["training_duration_sec"].append(t4-t0)
+
+        return deepcopy(self._neural_net)
+
+
+    def train_dynamically_truncated(
+        self,
+        starting_training_batch_size: int = 50,
+        max_training_batch_size: int = 1000,
+        learning_rate: float = 5e-4,
+        validation_fraction: float = 0.5,
+        stop_after_epochs: int = 20,
+        training_rate: float = 1,
+        max_num_epochs: int = 2**31 - 1,
+        max_num_simulations: int = 10**6,
+        min_training_std: float = 1e-10,
+        min_training_ma_std: float = 1e-10,
+        clip_max_norm: Optional[float] = 5.0,
+        resume_training: bool = False,
+        discard_prior_samples: bool = False,
+        retrain_from_scratch: bool = False,
+        show_train_summary: bool = False,
+        dataloader_kwargs: Optional[Dict] = None,
+        use_amsgrad: bool = False,
+        show_train_plot: bool = False,
+        metrics_dictionary: Optional[Dict] = None,
+        monitoring_interval: int = 10,
+        visualise_mnle = None,
+        score_mnle = None,
+        rectify_loss = False,
+    ) -> flows.Flow:
+        r"""Train the density estimator to learn the distribution $p(x|\theta)$.
+
+        Args:
+            resume_training: Can be used in case training time is limited, e.g. on a
+                cluster. If `True`, the split between train and validation set, the
+                optimizer, the number of epochs, and the best validation log-prob will
+                be restored from the last time `.train()` was called.
+            discard_prior_samples: Whether to discard samples simulated in round 1, i.e.
+                from the prior. Training may be sped up by ignoring such less targeted
+                samples.
+            retrain_from_scratch: Whether to retrain the conditional density
+                estimator for the posterior from scratch each round.
+            show_train_summary: Whether to print the number of epochs and validation
+                loss after the training.
+            dataloader_kwargs: Additional or updated kwargs to be passed to the training
+                and validation dataloaders (like, e.g., a collate_fn)
+
+        Returns:
+            Density estimator that has learned the distribution $p(x|\theta)$.
+        """
+        # Load data from most recent round.
+        self._round = max(self._data_round_index)
+        # Starting index for the training set (1 = discard round-0 samples).
+        start_idx = int(discard_prior_samples and self._round > 0)
+
+        _, val_loader = self.get_dataloaders(
+            start_idx,
+            starting_training_batch_size,
+            validation_fraction,
+            resume_training,
+            dataloader_kwargs=dataloader_kwargs,
+        )
+
+        # First round or if retraining from scratch:
+        # Call the `self._build_neural_net` with the rounds' thetas and xs as
+        # arguments, which will build the neural network
+        # This is passed into NeuralPosterior, to create a neural posterior which
+        # can `sample()` and `log_prob()`. The network is accessible via `.net`.
+        if self._neural_net is None or retrain_from_scratch:
+            # Get theta,x to initialize NN
+            theta, x, _ = self.get_simulations(starting_round=start_idx)
+            # Use only training data for building the neural net (z-scoring transforms)
+            self._neural_net = self._build_neural_net(
+                theta[self.train_indices].to("cpu"),
+                x[self.train_indices].to("cpu"),
+            )
+            self._x_shape = x_shape_from_simulation(x.to("cpu"))
+            del theta, x
+
+            self.un_append_simulations()
+
+            assert (
+                len(self._x_shape) < 3
+            ), "SNLE cannot handle multi-dimensional simulator output."
+
+        self._neural_net.to(self._device)
+        if not resume_training:
+            self.optimizer = optim.Adam(
+                list(self._neural_net.parameters()),
+                lr=learning_rate,
+                amsgrad=use_amsgrad,
+            )
+            self.epoch, self._total_num_simulations, self._total_num_effective_sims, self._running_num_simulations, self._training_batch_size, self._train_log_prob_dn, self._train_log_prob_cn, self._train_log_prob, self._val_log_prob = 0, 0, 0, 0, starting_training_batch_size, float("-Inf"), float("-Inf"), float("-Inf"), float("-Inf")
+
+        num_workers = cpu_count()-1
+
+        t0 = time.time()
+        while self._running_num_simulations < max_num_simulations and not self._converged_dynamically(self.epoch, min_training_std, min_training_ma_std,):
+            #max_num_epochs: # and not self._converged_dynamically(
+            # self.epoch, min_training_std, min_training_ma_std,
+        # ):
+            t1 = time.time()
+
+            # Compute (mini)batch size
+            training_batch_size_step = int(np.ceil(training_rate*self._total_num_simulations))
+            self._training_batch_size += training_batch_size_step
+            if self._training_batch_size > max_training_batch_size:
+                self._training_batch_size = max_training_batch_size
+
+            num_simulations = self._training_batch_size
+            simulation_batch_size = int(np.ceil(num_simulations/100))
+            num_simulations -= (num_simulations % simulation_batch_size)
+
+            # print("th x sh 0", num_simulations, simulation_batch_size)
+
+            # Simulate parameter-data pairs and append them.
+            theta, x = simulate_for_sbi_truncated(
+                simulator=self._simulator,
+                proposal=self._proposal,
+                num_simulations=num_simulations,
+                num_workers=num_workers,
+                )
+            
+            # # Append simulations for current epoch.
+            # self.append_simulations(theta, x)
+            
+            # print("th x sh", theta.shape, x.shape)
+
+            # # Prepare data loader for training.
+            # train_loader = self.get_dataloaders_online(
+            #     start_idx,
+            #     num_simulations, #training_batch_size,
+            #     dataloader_kwargs=dataloader_kwargs,
+            # )
+
+            # print("th", theta)
+            # print("x", x)
+
+            #theta, x = clean_simulations(theta, x)
+
+            #clear_output(wait=True)
+
+            # Train for a single epoch.
+            self._neural_net.train()
+            train_log_probs_sum = 0
+
+            self.optimizer.zero_grad()
+            theta_batch, x_batch = theta, x
+
+            # Evaluate on x with theta as context.
+            train_losses = self._loss(theta=theta_batch, x=x_batch)
+            train_losses = torch.nan_to_num(train_losses)
+            train_loss = torch.mean(train_losses)
+            train_log_probs_sum -= train_losses.sum().item()
+
+            if rectify_loss:
+                # if log_transform_x == False:    # ensure probs for rt > 0 for aborts is 0 and for rt < 0 for non-aborts is also 0
+                relabelled_x_batch = torch.clone(x_batch)
+                # cont_x, disc_x = _separate_x(x)
+                # abort_inds = disc_x == 0
+                # nonabort_inds = disc_x > 0
+                # pos_rt_inds = cont_x > 0
+                # neg_rt_inds = cont_x < 0
+                relabelled_x_batch[:,0] *= -1
+                relabelled_train_losses = self._loss(theta=theta_batch, x=relabelled_x_batch)
+                rectified_train_losses = torch.clone(relabelled_train_losses)
+                nonzero_prob_inds = torch.abs(relabelled_train_losses) > 10**(-7)
+                # rectified_train_losses[nonzero_prob_inds] = train_losses[nonzero_prob_inds]
+                rectified_train_losses[nonzero_prob_inds] = (0.001)*train_losses[nonzero_prob_inds]
+                # rectified_train_losses[torch.logical_not(nonzero_prob_inds)] = (100.0)*train_losses[torch.logical_not(nonzero_prob_inds)] #+ relabelled_train_losses[nonzero_prob_inds]
+                # rectified_train_losses[torch.logical_not(nonzero_prob_inds)] = train_losses[torch.logical_not(nonzero_prob_inds)] - relabelled_train_losses[torch.logical_not(nonzero_prob_inds)]
+
+                # rectified_train_losses[nonzero_prob_inds] = train_losses[nonzero_prob_inds] + 10**1
+                rectified_train_loss = torch.mean(rectified_train_losses)
+                # relabelled_x_batch[abort_inds]
+                # rectified_inds = abort_inds * nonzero_prob_inds
+                # rectified_inds = nonabort_inds * nonzero_prob_inds
+                rectified_train_loss.backward()
+            else:
+                train_loss.backward()
+            if clip_max_norm is not None:
+                clip_grad_norm_(
+                    self._neural_net.parameters(),
+                    max_norm=clip_max_norm,
+                )
+            self.optimizer.step()
+
+            # Log training log prob for each minibatch.
+            self._summary["all_training_log_probs"].append(train_losses.tolist())
+
+            self.epoch += 1
+
+            # Keep track of current epoch and epoch duration
+            t2 = time.time()
+            self._summary["epoch_durations_sec"].append(t2-t1)
+            self._summary["epochs"].append(self.epoch)
+
+            # # Compute the training lps average of current batch.
+            # train_log_prob_average = train_log_probs_sum / x.shape[0]
+            # self._summary["training_log_probs"].append(train_log_prob_average)
+
+            # Keep track of the number of simulations/grad calls used to train net.
+            self._total_num_simulations += x.shape[0]
+            self._total_num_effective_sims += x.shape[0]
+
+            # Batch and minibatch information.
+            self._summary["minibatch_sizes"].append(x.shape[0])
+            self._summary["batch_sizes"].append(x.shape[0])
+
+            # Compute the training lps average of current batch.
+            train_log_prob_average = train_log_probs_sum / x.shape[0]
+            self._summary["training_log_probs"].append(train_log_prob_average)
+
+            self._running_num_simulations += len(train_losses)
+            self._summary["running_num_simulations"].append(self._running_num_simulations)
+
+            if self.epoch % monitoring_interval == 1:
+
+                # # Compute the training lps average of current batch.
+                # train_log_prob_average = train_log_probs_sum / x.shape[0]
+                # self._summary["training_log_probs"].append(train_log_prob_average)
+
+                # self._running_num_simulations += len(train_losses)
+                # self._summary["running_num_simulations"].append(self._running_num_simulations)
+                # self._summary["running_num_simulations"].append(self._total_num_simulations)
+                # self._summary["running_num_effective_simulations"].append(self._total_num_effective_sims)
+
+                # Calculate validation performance.
+                self._neural_net.eval()
+                val_log_prob_sum = 0
+                with torch.no_grad():
+                    for batch in val_loader:
+                        theta_batch, x_batch = (
+                            batch[0].to(self._device),
+                            batch[1].to(self._device),
+                        )
+                        # Evaluate on x with theta as context.
+                        val_losses = self._loss(theta=theta_batch, x=x_batch)
+                        val_losses = torch.nan_to_num(val_losses)
+                        val_log_prob_sum -= val_losses.sum().item()
+
+                        # Log validation log prob for each minibatch.
+                        self._summary["all_validation_log_probs"].append(val_losses.tolist())
+
+                # Take mean over all validation samples.
+                self._val_log_prob = val_log_prob_sum / (
+                    len(val_loader) * val_loader.batch_size  # type: ignore
+                )
+                # Log validation log prob for every epoch.
+                self._summary["validation_log_probs"].append(self._val_log_prob)
+
+                self._maybe_save_metrics(score_mnle=score_mnle, neural_net=self._neural_net, summary=self._summary, metrics_dictionary=metrics_dictionary) # Huber loss
+                self._maybe_save_analytical_lps(analytical_likelihood=self._likelihood, theta=theta, x=x, summary=self._summary) # Analytical likelihood
+                self._maybe_compute_example_RTs(visualise_mnle=visualise_mnle, neural_net=self._neural_net, summary=self._summary, metrics_dictionary=metrics_dictionary) # Example RT distributions
+                self._maybe_plot_training_dynamic(show_plot=show_train_plot, summary=self._summary, monitoring_interval=monitoring_interval)# Plot training, validation and Huber losses
+                self._maybe_show_progress(self._show_progress_bars, self.epoch)
+
+            # # Remove simulations currently stored before the next epoch.
+            # self.un_append_simulations()
 
             t3 = time.time()
             self._summary["total_epoch_durations_sec"].append(t3-t1)
